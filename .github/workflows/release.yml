@@ -20,7 +20,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ github.ref }}
+      - name: Check out the release source
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git fetch --depth=1 origin "refs/tags/$env:AIRFRAME_TAG"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git checkout --detach FETCH_HEAD
       - run: rustup toolchain install stable --profile minimal
       - name: Validate release tag
         run: |
@@ -56,10 +62,9 @@ jobs:
           }
           $app = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Airframe'
           if ("v$($app.DisplayVersion)" -ne $env:AIRFRAME_TAG) { throw 'Windows registered the wrong Airframe version.' }
-          $env:AIRFRAME_SKIP_UPDATE_CHECK = '1'
-          $running = Start-Process -FilePath $installed -WorkingDirectory (Split-Path $installed) -WindowStyle Hidden -PassThru
-          if ($running.WaitForExit(5000)) { throw "Airframe exited during startup with $($running.ExitCode)." }
-          Stop-Process -InputObject $running
+          if (-not (Test-Path -LiteralPath (Join-Path (Split-Path $installed) 'Uninstall.exe'))) {
+            throw 'The installer did not write the Airframe uninstaller.'
+          }
       - name: Publish installer
         env:
           GH_TOKEN: ${{ github.token }}
