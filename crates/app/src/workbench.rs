@@ -818,6 +818,14 @@ impl Workbench {
     pub fn connect(&mut self, part: Part, a: Uuid, b: Uuid) {
         self.connect_ports(part, a, b, [None, None]);
     }
+    pub fn pick_connection_node(&mut self, part: Part, id: Uuid) {
+        if let Some(from) = self.from {
+            self.connect(part, from, id);
+        } else if self.endpoint_available(id, part, false) {
+            self.set_tool(part);
+            self.from = Some(id);
+        }
+    }
     pub fn connect_ports(&mut self, part: Part, a: Uuid, b: Uuid, ports: [Option<PortSide>; 2]) {
         if a == b
             || !self.endpoint_available(a, part, false)
@@ -2221,6 +2229,63 @@ mod tests {
         assert!(matches!(room.kind, NodeKind::Room { .. }));
         assert_eq!(room.floor, second_id);
         assert_eq!(app.picked(), Some(room.id));
+    }
+
+    #[test]
+    fn door_drop_and_click_connect_rooms_without_ducts_or_junctions() {
+        let ctx = Context::default();
+        let mut app = Workbench::new(&ctx, None);
+        app.load_project(&ctx, Project::new("Door test"), None);
+        let floor = app.active_floor;
+        let room = Part::Room.node().unwrap();
+        let from = app.project.add_node("Zone 1", floor, room, [-210.0, 0.0]);
+        let to = app.project.add_node("Zone 2", floor, room, [210.0, 0.0]);
+        let frame = |app: &mut Workbench, events| {
+            let _ = ctx.run(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1200.0, 800.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    app.start_library_drag(ctx);
+                    CentralPanel::default().show(ctx, |ui| app.canvas(ui, palette(false)));
+                },
+            );
+        };
+        frame(&mut app, vec![]);
+        let first = pos2(390.0, 429.0);
+        let second = pos2(810.0, 429.0);
+        let button = |pos, pressed| UiEvent::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        let source = pos2(40.0, 24.0);
+        frame(
+            &mut app,
+            vec![UiEvent::PointerMoved(source), button(source, true)],
+        );
+        app.library_press = Some((LibraryDrag::Part(Part::Door), source));
+        frame(
+            &mut app,
+            vec![UiEvent::PointerMoved(first), button(first, false)],
+        );
+        assert_eq!(app.from, Some(from));
+        assert!(app.project.network.branches.is_empty());
+        frame(
+            &mut app,
+            vec![UiEvent::PointerMoved(second), button(second, true)],
+        );
+        frame(&mut app, vec![button(second, false)]);
+        assert_eq!(app.project.network.nodes.len(), 2);
+        let [door] = app.project.network.branches.as_slice() else {
+            panic!("expected one direct branch")
+        };
+        assert_eq!((door.from, door.to), (from, to));
+        assert!(matches!(door.kind, BranchKind::Opening { .. }));
+        assert_eq!(door.aperture, Part::Door.aperture());
     }
 
     #[test]

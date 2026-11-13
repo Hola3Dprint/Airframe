@@ -86,6 +86,15 @@ pub struct Duct {
     pub length_m: f64,
     pub roughness_m: f64,
     pub minor_k: f64,
+    #[serde(default)]
+    pub additional_loss_pa: f64,
+    #[serde(default = "Duct::default_loss_airflow")]
+    pub loss_airflow_m3_s: f64,
+}
+impl Duct {
+    fn default_loss_airflow() -> f64 {
+        0.1
+    }
 }
 impl Default for Duct {
     fn default() -> Self {
@@ -94,6 +103,8 @@ impl Default for Duct {
             length_m: 5.0,
             roughness_m: 0.00009,
             minor_k: 1.0,
+            additional_loss_pa: 0.0,
+            loss_airflow_m3_s: Self::default_loss_airflow(),
         }
     }
 }
@@ -525,6 +536,7 @@ impl Project {
             BranchKind::Duct { mut duct, riser } => {
                 duct.length_m *= factor;
                 duct.minor_k *= factor;
+                duct.additional_loss_pa *= factor;
                 BranchKind::Duct { duct, riser }
             }
             fan => fan,
@@ -708,6 +720,8 @@ fn join_series(a: BranchKind, b: BranchKind) -> Option<BranchKind> {
         ) if a.section == b.section && a.roughness_m == b.roughness_m && riser == other => {
             a.length_m += b.length_m;
             a.minor_k += b.minor_k;
+            a.additional_loss_pa +=
+                b.additional_loss_pa * (a.loss_airflow_m3_s / b.loss_airflow_m3_s).powi(2);
             Some(BranchKind::Duct { duct: a, riser })
         }
         (fan, BranchKind::Opening { k: 1800.0 }) if fan.tau().is_some() => Some(fan),

@@ -1,10 +1,12 @@
 use crate::workbench::Workbench;
 use airflow::model::{Network, Node, NodeKind};
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use uuid::Uuid;
 
 type Positions = BTreeMap<Uuid, [f32; 2]>;
 type Focus = (Uuid, HashSet<Uuid>);
+const CIRCUIT_COLUMN: f32 = 340.0;
+const CIRCUIT_ROW: f32 = 150.0;
 
 impl Workbench {
     pub(crate) fn inline_port(&self, node: &Node) -> bool {
@@ -15,7 +17,7 @@ impl Workbench {
 
     pub(crate) fn circuit_focus(&self) -> Option<Focus> {
         let net = &self.project.network;
-        if !self.focus_circuit || net.nodes.len() < 12 {
+        if !self.focus_circuit {
             return None;
         }
         let room =
@@ -50,15 +52,15 @@ impl Workbench {
                 }
             }
             right.retain(|id| !left.contains(id));
-            for (column, ids) in [(-350.0, left), (350.0, right)] {
+            for (column, ids) in [(-CIRCUIT_COLUMN, left), (CIRCUIT_COLUMN, right)] {
                 let center = ids.len().saturating_sub(1) as f32 * 0.5;
                 for (i, id) in ids.into_iter().enumerate() {
-                    pos.insert(id, [column, (i as f32 - center) * 135.0]);
+                    pos.insert(id, [column, (i as f32 - center) * CIRCUIT_ROW]);
                 }
             }
             return pos;
         }
-        let mut positions = connected_layout(net, |_| true, 270.0, 125.0);
+        let mut positions = circuit_layout(net);
         positions.extend(
             self.project
                 .drawing
@@ -73,7 +75,7 @@ impl Workbench {
         let before = self.project.clone();
         let net = &self.project.network;
         if circuit {
-            self.project.drawing.circuit = connected_layout(net, |_| true, 270.0, 125.0);
+            self.project.drawing.circuit.clear();
         } else if self.floor_editable(self.active_floor) {
             let sizes = &self.project.drawing.sizes;
             let mut spacing = [260.0_f32, 145.0_f32];
@@ -99,6 +101,67 @@ impl Workbench {
         }
         self.checkpoint(before);
     }
+}
+
+fn circuit_layout(net: &Network) -> Positions {
+    let indices: HashMap<_, _> = net
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.id, i))
+        .collect();
+    let mut outgoing = vec![Vec::new(); net.nodes.len()];
+    for b in &net.branches {
+        if let (Some(&a), Some(&z)) = (indices.get(&b.from), indices.get(&b.to)) {
+            outgoing[a].push(z);
+        }
+    }
+    // Fixed-pressure supplies start a stage even when a relief path returns to them.
+    let sources: Vec<_> = net
+        .nodes
+        .iter()
+        .zip(&outgoing)
+        .map(|(n, next)| n.kind.fixed_gauge_pa().is_some() && !next.is_empty())
+        .collect();
+    let mut incoming = vec![0; net.nodes.len()];
+    for &z in outgoing.iter().flatten().filter(|&&z| !sources[z]) {
+        incoming[z] += 1;
+    }
+    let mut pending: BTreeSet<_> = incoming
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(i, count)| (count, i))
+        .collect();
+    let mut rank = vec![0; net.nodes.len()];
+    let mut columns = BTreeMap::<usize, Vec<Uuid>>::new();
+    // Process merges after their predecessors. If a loop remains, start with the
+    // node with the fewest unresolved incoming paths and draw those paths back.
+    while let Some((_, a)) = pending.pop_first() {
+        columns.entry(rank[a]).or_default().push(net.nodes[a].id);
+        for &z in &outgoing[a] {
+            if !sources[z] && pending.remove(&(incoming[z], z)) {
+                incoming[z] -= 1;
+                rank[z] = rank[z].max(rank[a] + 1);
+                pending.insert((incoming[z], z));
+            }
+        }
+    }
+    let mid = columns.len().saturating_sub(1) as f32 * 0.5;
+    let mut result = Positions::new();
+    for (column, ids) in columns {
+        let center = ids.len().saturating_sub(1) as f32 * 0.5;
+        for (row, id) in ids.into_iter().enumerate() {
+            result.insert(
+                id,
+                [
+                    (column as f32 - mid) * CIRCUIT_COLUMN,
+                    (row as f32 - center) * CIRCUIT_ROW,
+                ],
+            );
+        }
+    }
+    result
 }
 
 fn connected_layout(net: &Network, show: impl Fn(&Node) -> bool, dx: f32, dy: f32) -> Positions {
@@ -156,4 +219,44 @@ fn connected_layout(net: &Network, show: impl Fn(&Node) -> bool, dx: f32, dy: f3
         xy[1] -= mid;
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use airflow::model::{BranchKind, Project, System};
+
+    #[test]
+    fn circuit_keeps_parallel_rows_before_their_merge_and_routes_relief_back() {
+        let mut p = Project::new("Circuit stages");
+        let floor = p.network.floors[0].id;
+        let room = NodeKind::Room {
+            volume_m3: 100.0,
+            initial_pa: 0.0,
+        };
+        let outside = p.add_node("Atmosphere", floor, NodeKind::Atmosphere, [0.0; 2]);
+        let a = p.add_node("Zone 1A", floor, room, [0.0; 2]);
+        let b = p.add_node("Zone 1B", floor, room, [0.0; 2]);
+        let merge = p.add_node("Zone 2", floor, room, [0.0; 2]);
+        for (from, to) in [
+            (outside, a),
+            (outside, b),
+            (a, merge),
+            (b, merge),
+            (merge, outside),
+        ] {
+            p.add_branch(
+                "Path",
+                from,
+                to,
+                System::Transfer,
+                BranchKind::Opening { k: 1.0 },
+            );
+        }
+        let layout = circuit_layout(&p.network);
+        assert!(layout[&outside][0] < layout[&a][0]);
+        assert!(layout[&a][0] < layout[&merge][0]);
+        assert_eq!(layout[&a][0], layout[&b][0]);
+        assert_ne!(layout[&a][1], layout[&b][1]);
+    }
 }

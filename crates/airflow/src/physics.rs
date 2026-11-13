@@ -91,7 +91,8 @@ pub fn duct_loss(duct: Duct, air: Air, q: f64) -> f64 {
         let blend = ((re - 2300.0) / 1700.0).min(1.0);
         laminar * (1.0 - blend) + turbulent * blend
     };
-    friction + dynamic_pa * duct.minor_k
+    let flow_ratio = q / duct.loss_airflow_m3_s;
+    friction + dynamic_pa * duct.minor_k + quadratic_loss(duct.additional_loss_pa, flow_ratio)
 }
 pub fn duct_flow(duct: Duct, air: Air, dp: f64) -> f64 {
     if dp == 0.0 {

@@ -297,11 +297,15 @@ pub fn export(path: &Path, name: &str, point: &OperatingPoint) -> Result<(), Xls
                 "Custom rated Q · m³/s",
                 "Curve segment",
                 "Custom reverse drag k",
+                "Additional loss · Pa",
+                "Loss reference flow · m³/s",
             ],
         )?;
         for c in [0, 3, 4, 30, 31, 32] {
             ws.set_column_width(c, if c < 5 { 32 } else { 38 })?;
         }
+        ws.set_column_width(50, 24)?;
+        ws.set_column_width(51, 28)?;
         let index: HashMap<_, _> = net
             .nodes
             .iter()
@@ -483,7 +487,7 @@ pub fn export(path: &Path, name: &str, point: &OperatingPoint) -> Result<(), Xls
             ("Node balance", "Net flow = inflow − outflow. Fixed-pressure boundaries can supply or absorb air and have no flow balance constraint.".into()),
             ("Passive branch", "Pressure error = Pfrom − Pto − signed loss. Airflow is positive in the listed direction.".into()),
             ("Opening / door / leakage", "Loss = k·Q·√(Q² + ε²). For a physical opening, k = ρ / [2(Cd·A·open fraction)²].".into()),
-            ("Duct / riser", "Loss = blended laminar and turbulent friction + signed dynamic pressure × minor K. Elevations document geometry; no stack pressure is applied.".into()),
+            ("Duct / riser", "Loss = blended friction + signed dynamic pressure × minor K + additional loss × (Q/Qref) × abs(Q/Qref).".into()),
             ("Pressure fan", "Pressure error = Pfrom − Pto + fan rise. Rated fans use shutoff×speed² − k·Q·√(Q² + ε²).".into()),
             ("Custom fan", "Interpolate rated pressure at Q/speed, then multiply by speed². Above the last point, extend the last segment.".into()),
             ("Custom fan samples", "Keep rated flow strictly ascending from zero and rated pressure strictly descending to zero. Do not insert or remove rows.".into()),
@@ -524,6 +528,8 @@ fn write_duct(
     }
     s.input(ws, row, 18, d.roughness_m)?;
     s.input(ws, row, 19, d.minor_k)?;
+    s.input(ws, row, 50, d.additional_loss_pa)?;
+    s.input(ws, row, 51, d.loss_airflow_m3_s)?;
     let (area, diam) = area_and_diameter(d.section);
     let v = q / area;
     let re = air.density * v.abs() * diam / air.viscosity;
@@ -538,7 +544,11 @@ fn write_duct(
     };
     let loss = duct_loss(d, air, q);
     for (c, formula, value) in [
-        (8, format!("AP{r}*(1-AS{r})+AR{r}*AS{r}+AO{r}*T{r}"), loss),
+        (
+            8,
+            format!("AP{r}*(1-AS{r})+AR{r}*AS{r}+AO{r}*T{r}+AY{r}*(F{r}/AZ{r})*ABS(F{r}/AZ{r})"),
+            loss,
+        ),
         (
             33,
             format!("IF(O{r}=\"Round\",PI()*P{r}^2/4,Q{r}*R{r})"),

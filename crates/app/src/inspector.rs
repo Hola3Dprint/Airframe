@@ -262,6 +262,19 @@ impl Workbench {
                         duct.roughness_m = rough / 1000.0;
                     }
                     number(ui, "Fitting losses ΣK", &mut duct.minor_k, "", 0.05);
+                    number(
+                        ui,
+                        "Additional loss",
+                        &mut duct.additional_loss_pa,
+                        "Pa",
+                        0.5,
+                    );
+                    let mut reference_flow = duct.loss_airflow_m3_s * factor;
+                    number(ui, "At airflow", &mut reference_flow, unit, 1.0);
+                    if reference_flow != duct.loss_airflow_m3_s * factor {
+                        duct.loss_airflow_m3_s = reference_flow / factor;
+                    }
+                    ui.small("Additional loss scales with airflow squared.");
                     let (a, d) = physics::area_and_diameter(duct.section);
                     ui.label(format!("Area {a:.4} m²  ·  Dₕ {d:.3} m"));
                     ui.label(format!(
@@ -542,7 +555,7 @@ fn branch_math(ui: &mut Ui, p: Palette, branch: &Branch) {
                 &[T("P₁ − P₂ = "), S("ΔP", "loss"), T(" + L "), F("dQ", "dt")],
             );
             display_math(ui, p, &[T("L = "), F("ρℓ", "A")]);
-            ui.small("Duct loss includes wall friction and fittings. The storage term is zero at steady airflow.");
+            ui.small("Duct loss includes wall friction, fittings, and any additional loss set at a reference airflow.");
         }
         BranchKind::Opening { .. } => {
             display_math(ui, p, &[T("P₁ − P₂ = kQ√(Q² + ε²)")]);

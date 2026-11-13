@@ -26,6 +26,8 @@ A branch has one orientation from its first pressure node to its second. Each br
 
 The duct calculation uses Darcy f = 64/Re for laminar flow (hydraulic-diameter approximation for rectangles), Swamee–Jain for turbulent flow, and blends the losses from Re 2300 to 4000. Fittings are included through the summed minor-loss coefficient. The inspector can estimate inertance L_f = ρL/A; the integrator currently treats ducts as quasi-steady.
 
+A duct or riser can also specify an additional pressure loss ΔP_ref at a positive reference airflow Q_ref. The solver adds ΔP_ref × (Q/Q_ref) × abs(Q/Q_ref) to the calculated loss. It vanishes at zero airflow and opposes flow in either direction. Saved projects without this input default to zero additional loss.
+
 ## Integration and verification
 
 [Diffsol](https://docs.rs/diffsol/0.19.0/diffsol/) 0.19.0 provides adaptive BDF integration, a consistent initial state for a singular mass matrix, and dense output. Airframe supplies the equations, diagonal mass matrix, and Jacobian-vector product, then uses dense nalgebra LU. The matrix contains room capacitances, fan time constants, and exact zero rows for algebraic equations. Petgraph checks whether every junction has a pressure-dependent path to a room or fixed boundary. The solver restarts at each scheduled command change with the prior physical state, so no adaptive step crosses a fan event. Fans start at rest; initial passive flows are calculated consistently with initial pressures.

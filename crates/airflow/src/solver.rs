@@ -172,6 +172,9 @@ fn prepare(net: &Network, scenario: Option<&Scenario>) -> Result<SystemData, Sol
                     && (0.0..diameter).contains(&duct.roughness_m)
                     && duct.minor_k.is_finite()
                     && duct.minor_k >= 0.0
+                    && duct.additional_loss_pa.is_finite()
+                    && duct.additional_loss_pa >= 0.0
+                    && positive(duct.loss_airflow_m3_s)
             }
             BranchKind::FlowFan { design_m3_s, tau_s } => {
                 design_m3_s.is_finite()

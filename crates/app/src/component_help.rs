@@ -29,7 +29,7 @@ pub(crate) fn summary(part: Part) -> &'static str {
         Part::TransferAir => "Models a passive grille that lets air move between spaces.",
         Part::SupplyAir => "Delivers a specified airflow from a supply path into a room.",
         Part::Duct => {
-            "Carries air between nodes. Its size, length, roughness, and fittings determine pressure loss."
+            "Carries air between nodes. Pressure loss comes from friction, fittings, and any additional loss set at a reference airflow."
         }
         Part::Riser => "Carries air through a vertical duct on one level or between levels.",
         Part::Supply => "Pushes a set airflow into a duct or room.",
@@ -49,6 +49,9 @@ pub(crate) fn library_usage(part: Part) -> &'static str {
             "Connect a passive opening for a vent, or an exhaust fan for powered discharge."
         }
         Part::Junction => "Drag onto the canvas where multiple ducts or openings need to meet.",
+        Part::Door => {
+            "Drop onto the first room and click the second, or select Door and click both rooms."
+        }
         Part::Riser => {
             "Drop on the canvas, a node, or a wire. Use the Inspector to set the destination level."
         }
@@ -83,7 +86,7 @@ pub(crate) fn branch_summary(branch: &Branch) -> (&'static str, &'static str) {
         ),
         BranchKind::Duct { .. } => (
             summary(Part::Duct),
-            "Select the duct to edit its dimensions, roughness, and fitting losses.",
+            "Select the duct to edit its geometry, fitting losses, or additional pressure loss.",
         ),
         BranchKind::FlowFan { .. } => (
             match branch.system {

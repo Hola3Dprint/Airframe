@@ -130,6 +130,42 @@ fn reverse_flow_counts_as_inflow_at_the_correct_node() {
 }
 
 #[test]
+fn duct_additional_loss_follows_signed_airflow_and_survives_splitting() {
+    let mut p = fixture();
+    let duct = Duct {
+        additional_loss_pa: 25.0,
+        loss_airflow_m3_s: 600.0 / M3_H,
+        ..Duct::default()
+    };
+    let air = p.network.air;
+    let q = duct.loss_airflow_m3_s;
+    let base = Duct {
+        additional_loss_pa: 0.0,
+        ..duct
+    };
+    let loss = |d, flow| airflow::physics::duct_loss(d, air, flow);
+    close(loss(duct, q) - loss(base, q), 25.0, 1e-12);
+    close(loss(duct, -q * 0.5) - loss(base, -q * 0.5), -6.25, 1e-12);
+    close(loss(duct, 0.0), 0.0, 1e-12);
+
+    let branch = &mut p.network.branches[0];
+    branch.kind = BranchKind::Duct { duct, riser: false };
+    let id = branch.id;
+    let point = solve(&p.network, || true).unwrap();
+    close(point.pressures[1], -loss(duct, q), 1e-6);
+    let node = p.add_node(
+        "Split",
+        p.network.floors[0].id,
+        NodeKind::Junction,
+        [0.0; 2],
+    );
+    p.split_branch(id, node, 0.25).unwrap();
+    let reopened = storage::decode(serde_json::to_vec(&p).unwrap().as_slice()).unwrap();
+    let split = solve(&reopened.network, || true).unwrap();
+    close(split.pressures[1], point.pressures[1], 1e-6);
+}
+
+#[test]
 fn deleting_an_inserted_component_restores_the_opening() {
     let mut p = fixture();
     let original = p.network.branches[0].clone();

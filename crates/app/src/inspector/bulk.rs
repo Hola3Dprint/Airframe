@@ -17,6 +17,8 @@ enum Field {
     Length,
     Roughness,
     Fittings,
+    AdditionalLoss,
+    LossAirflow,
     Diameter,
     Width,
     Height,
@@ -24,7 +26,7 @@ enum Field {
     End,
 }
 impl Field {
-    const ALL: [Self; 16] = [
+    const ALL: [Self; 18] = [
         Self::Volume,
         Self::FixedPressure,
         Self::Airflow,
@@ -36,6 +38,8 @@ impl Field {
         Self::Length,
         Self::Roughness,
         Self::Fittings,
+        Self::AdditionalLoss,
+        Self::LossAirflow,
         Self::Diameter,
         Self::Width,
         Self::Height,
@@ -59,6 +63,8 @@ impl Field {
             Self::Length => ("Length", "m", 0.1, 1.0),
             Self::Roughness => ("Roughness", "mm", 0.002, 1000.0),
             Self::Fittings => ("Fitting losses ΣK", "", 0.05, 1.0),
+            Self::AdditionalLoss => ("Additional loss", "Pa", 0.5, 1.0),
+            Self::LossAirflow => ("At airflow", flow_unit, 1.0, flow_scale),
             Self::Diameter => ("Diameter", "m", 0.005, 1.0),
             Self::Width => ("Duct width", "m", 0.005, 1.0),
             Self::Height => ("Duct height", "m", 0.005, 1.0),
@@ -99,6 +105,8 @@ impl Field {
                     Self::Length => Some(&mut duct.length_m),
                     Self::Roughness => Some(&mut duct.roughness_m),
                     Self::Fittings => Some(&mut duct.minor_k),
+                    Self::AdditionalLoss => Some(&mut duct.additional_loss_pa),
+                    Self::LossAirflow => Some(&mut duct.loss_airflow_m3_s),
                     _ => match (&mut duct.section, field) {
                         (Section::Round { diameter_m }, Self::Diameter) => Some(diameter_m),
                         (Section::Rectangular { width_m, .. }, Self::Width) => Some(width_m),
