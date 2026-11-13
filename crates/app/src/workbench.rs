@@ -312,7 +312,7 @@ impl Workbench {
             plan_visible: true,
             plan_opacity: 0.85,
             plan_texture: HashMap::new(),
-            overlay: Overlay::Floor,
+            overlay: Overlay::System,
             results: None,
             startup: crate::startup::Startup::default(),
             flow_cfm: true,
@@ -1233,15 +1233,8 @@ impl Workbench {
                         }
                         ui.menu_button(concat!("v", env!("CARGO_PKG_VERSION")), |ui| {
                             #[cfg(windows)]
-                            if self.updater.installed() {
-                                if ui.button("Check for updates").clicked() {
-                                    self.updater.check(ctx, true);
-                                    ui.close();
-                                }
-                            } else {
-                                ui.label(
-                                    "Automatic updates are available in the Windows installation.",
-                                );
+                            if self.updater.controls(ui) {
+                                ui.close();
                             }
                             ui.hyperlink_to(
                                 "Airframe releases",
@@ -1354,10 +1347,19 @@ impl Workbench {
         }
         let prev = self.project.clone();
         let mut open = self.settings;
-        Window::new("Project settings")
+        Window::new("Settings")
             .open(&mut open)
             .default_width(400.0)
             .show(ctx, |ui| {
+                #[cfg(windows)]
+                {
+                    eyebrow(ui, "AIRFRAME UPDATES", p);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(concat!("v", env!("CARGO_PKG_VERSION")));
+                        self.updater.controls(ui);
+                    });
+                    ui.separator();
+                }
                 ui.label("Project name");
                 ui.text_edit_singleline(&mut self.project.name);
                 ui.label("Project notes");

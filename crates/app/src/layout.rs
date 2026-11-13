@@ -1,12 +1,21 @@
 use crate::workbench::Workbench;
-use airflow::model::{Network, Node, NodeKind};
+use airflow::model::{Branch, BranchKind, Network, Node, NodeKind, System};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use uuid::Uuid;
 
 type Positions = BTreeMap<Uuid, [f32; 2]>;
 type Focus = (Uuid, HashSet<Uuid>);
-const CIRCUIT_COLUMN: f32 = 340.0;
-const CIRCUIT_ROW: f32 = 150.0;
+const CIRCUIT_COLUMN: f32 = 208.0;
+const CIRCUIT_ROW: f32 = 154.0;
+
+pub(crate) fn circuit_transfer(b: &Branch, from: &Node, to: &Node) -> bool {
+    from.floor != to.floor
+        || matches!(b.kind, BranchKind::Duct { riser: true, .. })
+        || (matches!(from.kind, NodeKind::Room { .. })
+            && matches!(to.kind, NodeKind::Room { .. })
+            && matches!(b.kind, BranchKind::Opening { .. })
+            && (b.aperture.is_some() || b.system == System::Transfer))
+}
 
 impl Workbench {
     pub(crate) fn inline_port(&self, node: &Node) -> bool {
@@ -113,10 +122,12 @@ fn circuit_layout(net: &Network) -> Positions {
     let mut outgoing = vec![Vec::new(); net.nodes.len()];
     for b in &net.branches {
         if let (Some(&a), Some(&z)) = (indices.get(&b.from), indices.get(&b.to)) {
-            outgoing[a].push(z);
+            let transfer = circuit_transfer(b, &net.nodes[a], &net.nodes[z]);
+            outgoing[a].push((z, transfer));
         }
     }
-    // Fixed-pressure supplies start a stage even when a relief path returns to them.
+    // A boundary feeding the network stays at the supply end, including when
+    // an extract branch also connects back to it.
     let sources: Vec<_> = net
         .nodes
         .iter()
@@ -124,8 +135,10 @@ fn circuit_layout(net: &Network) -> Positions {
         .map(|(n, next)| n.kind.fixed_gauge_pa().is_some() && !next.is_empty())
         .collect();
     let mut incoming = vec![0; net.nodes.len()];
-    for &z in outgoing.iter().flatten().filter(|&&z| !sources[z]) {
-        incoming[z] += 1;
+    for &(z, _) in outgoing.iter().flatten() {
+        if !sources[z] {
+            incoming[z] += 1;
+        }
     }
     let mut pending: BTreeSet<_> = incoming
         .iter()
@@ -133,35 +146,58 @@ fn circuit_layout(net: &Network) -> Positions {
         .enumerate()
         .map(|(i, count)| (count, i))
         .collect();
-    let mut rank = vec![0; net.nodes.len()];
-    let mut columns = BTreeMap::<usize, Vec<Uuid>>::new();
-    // Process merges after their predecessors. If a loop remains, start with the
-    // node with the fewest unresolved incoming paths and draw those paths back.
+    let mut order = Vec::with_capacity(net.nodes.len());
+    let mut order_index = vec![0; net.nodes.len()];
+    // Place merges after their feeds. For cycles, route the remaining edges
+    // back to the already placed nodes.
     while let Some((_, a)) = pending.pop_first() {
-        columns.entry(rank[a]).or_default().push(net.nodes[a].id);
-        for &z in &outgoing[a] {
+        order_index[a] = order.len();
+        order.push(a);
+        for &(z, _) in &outgoing[a] {
             if !sources[z] && pending.remove(&(incoming[z], z)) {
                 incoming[z] -= 1;
-                rank[z] = rank[z].max(rank[a] + 1);
                 pending.insert((incoming[z], z));
             }
         }
     }
-    let mid = columns.len().saturating_sub(1) as f32 * 0.5;
-    let mut result = Positions::new();
-    for (column, ids) in columns {
-        let center = ids.len().saturating_sub(1) as f32 * 0.5;
-        for (row, id) in ids.into_iter().enumerate() {
-            result.insert(
-                id,
-                [
-                    (column as f32 - mid) * CIRCUIT_COLUMN,
-                    (row as f32 - center) * CIRCUIT_ROW,
-                ],
-            );
+    let mut row = vec![None; net.nodes.len()];
+    let mut column = vec![0; net.nodes.len()];
+    let mut rows = 0_usize;
+    for &a in &order {
+        let lane = *row[a].get_or_insert_with(|| {
+            let next = rows;
+            rows += 1;
+            next
+        });
+        // Continue one path along the current row. Doors, risers and
+        // secondary branches join other rows at the current column.
+        let mut continuation = None;
+        for &(z, transfer) in &outgoing[a] {
+            if order_index[z] <= order_index[a] {
+                continue;
+            }
+            if !transfer && continuation.is_none() && row[z].is_none() {
+                row[z] = Some(lane);
+                continuation = Some(z);
+            }
+            column[z] = column[z].max(column[a] + usize::from(!transfer));
         }
     }
-    result
+    let middle_x = column.iter().copied().max().unwrap_or(0) as f32 * 0.5;
+    let middle_y = rows.saturating_sub(1) as f32 * 0.5;
+    net.nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| {
+            (
+                n.id,
+                [
+                    (column[i] as f32 - middle_x) * CIRCUIT_COLUMN,
+                    (row[i].unwrap_or(0) as f32 - middle_y) * CIRCUIT_ROW,
+                ],
+            )
+        })
+        .collect()
 }
 
 fn connected_layout(net: &Network, show: impl Fn(&Node) -> bool, dx: f32, dy: f32) -> Positions {
@@ -224,10 +260,10 @@ fn connected_layout(net: &Network, show: impl Fn(&Node) -> bool, dx: f32, dy: f3
 #[cfg(test)]
 mod tests {
     use super::*;
-    use airflow::model::{BranchKind, Project, System};
+    use airflow::{model::Project, storage};
 
     #[test]
-    fn circuit_keeps_parallel_rows_before_their_merge_and_routes_relief_back() {
+    fn circuit_keeps_parallel_rooms_on_separate_rows() {
         let mut p = Project::new("Circuit stages");
         let floor = p.network.floors[0].id;
         let room = NodeKind::Room {
@@ -254,9 +290,34 @@ mod tests {
             );
         }
         let layout = circuit_layout(&p.network);
+        assert_eq!(layout[&outside][1], layout[&a][1]);
         assert!(layout[&outside][0] < layout[&a][0]);
-        assert!(layout[&a][0] < layout[&merge][0]);
-        assert_eq!(layout[&a][0], layout[&b][0]);
+        assert_eq!(layout[&a][0], layout[&merge][0]);
         assert_ne!(layout[&a][1], layout[&b][1]);
+        assert!(layout[&merge][1] > layout[&a][1] && layout[&merge][1] > layout[&b][1]);
+    }
+
+    #[test]
+    fn two_floor_circuit_has_horizontal_runs_and_vertical_door_and_riser() {
+        let p = storage::decode(&include_bytes!("../../../examples/two-floor.airflow.json")[..])
+            .unwrap();
+        let layout = circuit_layout(&p.network);
+        let at = |name| {
+            let node = p.network.nodes.iter().find(|n| n.name == name).unwrap();
+            layout[&node.id]
+        };
+        let intake = at("Outdoor intake");
+        let corridor = at("Main corridor");
+        let first = at("Studio 01");
+        let second = at("Studio 02");
+        let third = at("Studio 03");
+        let last = at("Studio 04");
+        let extract = at("Outdoor discharge");
+        assert!(intake[0] < corridor[0] && corridor[0] < first[0]);
+        assert_eq!([intake[1], corridor[1]], [first[1]; 2]);
+        assert_eq!([first[0], second[0]], [third[0]; 2]);
+        assert!(first[1] < second[1] && second[1] < third[1]);
+        assert!(third[0] < last[0] && last[0] < extract[0]);
+        assert_eq!([last[1], extract[1]], [third[1]; 2]);
     }
 }

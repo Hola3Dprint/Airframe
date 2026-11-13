@@ -1,5 +1,6 @@
 use crate::{
     component_help,
+    layout::circuit_transfer,
     style::*,
     workbench::{LibraryDrag, Overlay, Part, View, Workbench, primary_press_in},
 };
@@ -67,8 +68,50 @@ struct Wire {
 }
 
 struct CircuitWire {
-    points: [Pos2; 6],
-    direction: f32,
+    points: Vec<Pos2>,
+    axis: Vec2,
+}
+
+impl CircuitWire {
+    fn symbol_center(&self, badge: Rect, index: usize, count: usize, zoom: f32) -> Pos2 {
+        badge.center() + self.axis * ((index as f32 - (count - 1) as f32 * 0.5) * 44.0 * zoom)
+    }
+
+    fn flow_arrow(&self, badge: Rect, reversed: bool) -> Option<(Pos2, Vec2)> {
+        let points = &self.points;
+        let pair = if reversed {
+            [points[1], points[0]]
+        } else {
+            [points[points.len() - 2], points[points.len() - 1]]
+        };
+        let (at, direction) = (pair[0].lerp(pair[1], 0.55), pair[1] - pair[0]);
+        if direction.length() >= 16.0 && !badge.expand(7.0).contains(at) {
+            return Some((at, direction.normalized()));
+        }
+        // Straight vertical links reach the destination through the center segment.
+        let band = |p: Pos2| {
+            let signed = (p - badge.center()).dot(self.axis);
+            signed.abs()
+                - if self.axis.y == 0.0 {
+                    badge.width()
+                } else {
+                    badge.height()
+                } * 0.5
+        };
+        let end = if reversed {
+            points[0]
+        } else {
+            points[points.len() - 1]
+        };
+        let sign = if reversed { -1.0 } else { 1.0 };
+        let at = end - self.axis * sign * (band(end) * 0.5);
+        (band(end) >= 18.0
+            && self
+                .points
+                .windows(2)
+                .any(|p| segment_distance(at, p[0], p[1]) <= 0.5))
+        .then_some((at, self.axis * sign))
+    }
 }
 
 pub(crate) struct MoveDrag {
@@ -477,14 +520,16 @@ impl Workbench {
                             if pane.is_none() {
                                 ui.toggle_value(&mut self.multi_select, "Multi-select")
                                     .on_hover_text("Toggle selections with a click, or hold Shift");
-                                ComboBox::from_id_salt("overlay")
-                                    .selected_text(self.overlay.label())
-                                    .show_ui(ui, |ui| {
-                                        for m in Overlay::ALL {
-                                            ui.selectable_value(&mut self.overlay, m, m.label());
-                                        }
-                                    });
                             }
+                        }
+                        if pane.is_none() {
+                            ComboBox::from_id_salt("overlay")
+                                .selected_text(self.overlay.label())
+                                .show_ui(ui, |ui| {
+                                    for m in Overlay::ALL {
+                                        ui.selectable_value(&mut self.overlay, m, m.label());
+                                    }
+                                });
                         }
                     });
                 });
@@ -542,7 +587,7 @@ impl Workbench {
         if !circuit_mode && self.plan_visible {
             self.paint_floor_plan(ctx, &painter, rect, camera);
         }
-        if self.project.drawing.grid {
+        if !circuit_mode && self.project.drawing.grid {
             grid(&painter, rect, camera, p);
         }
         let net = &self.project.network;
@@ -617,10 +662,10 @@ impl Workbench {
                 continue;
             }
             let inline = self.inline_port(n);
-            let size = if inline {
+            let size = if circuit_mode {
+                if inline { [14.0, 14.0] } else { [104.0, 26.0] }
+            } else if inline {
                 [12.0, 12.0]
-            } else if circuit_mode {
-                [126.0, 58.0]
             } else {
                 *self
                     .project
@@ -656,14 +701,6 @@ impl Workbench {
         nodes.sort_by(|a, b| a.opacity.total_cmp(&b.opacity));
         let drawn: HashMap<_, _> = nodes.iter().map(|n| (n.id, n)).collect();
         let find = |id| drawn.get(&id).copied();
-        if circuit_mode
-            && focus.is_none()
-            && !nodes
-                .iter()
-                .any(|n| self.project.drawing.circuit.contains_key(&n.id))
-        {
-            draw_circuit_stages(&painter, &nodes, p, camera.zoom);
-        }
         let selected_system = self
             .picked()
             .and_then(|id| net.branch(id))
@@ -707,19 +744,6 @@ impl Workbench {
             *count += 1;
         }
         let mut wires = Vec::with_capacity(routes.len());
-        let circuit_top = nodes
-            .iter()
-            .map(|n| n.rect.top())
-            .fold(f32::INFINITY, f32::min);
-        let mut return_lane = 0;
-        let mut port_counts = HashMap::new();
-        let mut port_ranks = HashMap::new();
-        if circuit_mode {
-            for (b, ..) in &routes {
-                *port_counts.entry((b.from, true)).or_insert(0_usize) += 1;
-                *port_counts.entry((b.to, false)).or_insert(0_usize) += 1;
-            }
-        }
         for (b, a, z, group, rank) in routes {
             let a_center = a.rect.center();
             let z_center = z.rect.center();
@@ -735,38 +759,60 @@ impl Workbench {
                     .then(|| map.get(&b.id))
                     .flatten()
                     .map(|&xy| camera.screen(rect, xy));
-                let span = (z_center.x - a_center.x) / camera.zoom;
-                let return_y = if manual.is_none() && circuit_detour(span) {
-                    let y = circuit_top - (70.0 + 48.0 * return_lane as f32) * camera.zoom;
-                    return_lane += 1;
-                    Some(y)
+                let count_in_group = groups[&group];
+                let mut offset = (rank as f32 - (count_in_group - 1) as f32 * 0.5) * 36.0;
+                let transfer = circuit_transfer(
+                    b,
+                    net.node(b.from).expect("visible source"),
+                    net.node(b.to).expect("visible destination"),
+                );
+                let delta = z_center - a_center;
+                let vertical =
+                    delta.y.abs() > camera.zoom && (transfer || delta.x.abs() < 95.0 * camera.zoom);
+                let bounds = Rect::from_two_pos(a_center, z_center);
+                let mut at = manual.unwrap_or(bounds.center());
+                if manual.is_none()
+                    && vertical
+                    && nodes.iter().any(|n| {
+                        let point = n.rect.center();
+                        point.y > bounds.top() + camera.zoom
+                            && point.y < bounds.bottom() - camera.zoom
+                            && (point.x - at.x).abs() < 45.0 * camera.zoom
+                    })
+                {
+                    at.x += 60.0 * camera.zoom;
+                }
+                if manual.is_none()
+                    && !vertical
+                    && nodes.iter().any(|n| {
+                        let point = n.rect.center();
+                        point.x > bounds.left() + camera.zoom
+                            && point.x < bounds.right() - camera.zoom
+                            && (point.y - at.y).abs() <= camera.zoom
+                    })
+                {
+                    offset -= 54.0 + count_in_group.saturating_sub(1) as f32 * 18.0;
+                }
+                if manual.is_none() {
+                    if vertical {
+                        at.x += offset * camera.zoom;
+                    } else {
+                        at.y += offset * camera.zoom;
+                    }
+                }
+                let axis = if vertical {
+                    vec2(0.0, delta.y.signum())
                 } else {
-                    None
-                };
-                let slots = [(b.from, true), (b.to, false)].map(|key| {
-                    let rank = port_ranks.entry(key).or_insert(0_usize);
-                    let count = (port_counts[&key] - 1) as f32;
-                    let offset = (*rank as f32 - count * 0.5) * (40.0 / count.max(3.0));
-                    *rank += 1;
-                    offset
-                });
-                let offset = if return_y.is_some() {
-                    0.0
-                } else {
-                    (rank as f32 - (groups[&group] - 1) as f32 * 0.5) * 54.0
+                    vec2(if delta.x < 0.0 { -1.0 } else { 1.0 }, 0.0)
                 };
                 let (route, badge) =
-                    circuit_wire([a, z], count, manual, return_y, offset, slots, camera.zoom);
+                    circuit_wire([a_center, z_center], count, at, axis, camera.zoom);
                 wires.push(Wire {
                     id: b.id,
-                    points: [route.points[0], badge.center(), route.points[5]],
+                    points: [a_center, badge.center(), z_center],
                     opacity: 1.0,
                     badge,
-                    color: if self.overlay == Overlay::Floor {
-                        self.wire_color(b, p)
-                    } else {
-                        p.accent
-                    },
+                    color: self.wire_color(b, p),
                     inline_card: false,
                     circuit: Some(route),
                 });
@@ -1137,6 +1183,20 @@ impl Workbench {
                 continue;
             };
             let selected = self.selection.contains(&w.id);
+            if w.circuit.is_some() {
+                let active = selected || route.contains(&w.id) || badge_hit == Some(w.id);
+                draw_circuit_branch(&painter, w, branch, net.air, camera.zoom, p, active);
+                if (active || self.overlay == Overlay::Direction)
+                    && let Some(q) = self.flow(w.id).filter(|q| q.abs() > 1e-7)
+                    && let Some((at, direction)) = w
+                        .circuit
+                        .as_ref()
+                        .and_then(|wire| wire.flow_arrow(w.badge, q < 0.0))
+                {
+                    arrow(&painter, at, direction, w.color);
+                }
+                continue;
+            }
             if w.inline_card {
                 continue;
             }
@@ -1172,13 +1232,7 @@ impl Workbench {
             }
             let q = self.flow(w.id);
             let backward = q.is_some_and(|q| q < -1e-8);
-            let (a, b) = if let Some(circuit) = &w.circuit {
-                if backward {
-                    (circuit.points[1], circuit.points[0])
-                } else {
-                    (circuit.points[4], circuit.points[5])
-                }
-            } else if backward {
+            let (a, b) = if backward {
                 (w.points[1], w.points[0])
             } else {
                 (w.points[1], w.points[2])
@@ -1204,51 +1258,24 @@ impl Workbench {
                 continue;
             }
             let stroke = Stroke::new(if selected { 2.0 } else { 1.0_f32 }, color);
-            if let Some(route) = &w.circuit {
-                let elements = circuit::branch_elements(branch, net.air);
-                let middle = (circuit::branch_elements(branch, net.air).count() - 1) as f32 * 0.5;
-                for (index, element) in elements.enumerate() {
-                    let offset = (index as f32 - middle) * 54.0 * route.direction;
-                    let center = w.badge.center() + vec2(offset * camera.zoom, 0.0);
-                    let bounds = Rect::from_center_size(center, vec2(38.0, 24.0) * camera.zoom);
-                    painter.rect(bounds, 2, p.surface, stroke, StrokeKind::Inside);
-                    for sign in [-1.0, 1.0] {
-                        painter.line_segment(
-                            [
-                                center + vec2(sign * 19.0 * camera.zoom, 0.0),
-                                center + vec2(sign * 14.0 * camera.zoom, 0.0),
-                            ],
-                            Stroke::new(1.4_f32, color),
-                        );
-                    }
-                    let scale = camera.zoom
-                        * if matches!(element.symbol, Symbol::CurrentSource) {
-                            route.direction
-                        } else {
-                            1.0
-                        };
-                    draw_symbol(&painter, center, element.symbol, color, scale);
-                }
+            painter.rect(w.badge, 5, p.surface, stroke, StrokeKind::Inside);
+            let label = if branch.kind.tau().is_some() {
+                "FAN"
+            } else if matches!(branch.kind, BranchKind::Opening { .. }) {
+                "OP"
+            } else if matches!(branch.kind, BranchKind::Duct { riser: true, .. }) {
+                "VR"
             } else {
-                painter.rect(w.badge, 5, p.surface, stroke, StrokeKind::Inside);
-                let label = if branch.kind.tau().is_some() {
-                    "FAN"
-                } else if matches!(branch.kind, BranchKind::Opening { .. }) {
-                    "OP"
-                } else if matches!(branch.kind, BranchKind::Duct { riser: true, .. }) {
-                    "VR"
-                } else {
-                    "DX"
-                };
-                painter.text(
-                    w.badge.center(),
-                    Align2::CENTER_CENTER,
-                    label,
-                    FontId::monospace((10.0 * camera.zoom).clamp(7.0, 14.0)),
-                    color,
-                );
-            }
-            if (camera.zoom > 0.62 || circuit_mode && camera.zoom > 0.4) && !overview {
+                "DX"
+            };
+            painter.text(
+                w.badge.center(),
+                Align2::CENTER_CENTER,
+                label,
+                FontId::monospace((10.0 * camera.zoom).clamp(7.0, 14.0)),
+                color,
+            );
+            if camera.zoom > 0.62 && !overview {
                 let font = FontId::proportional((11.5 * camera.zoom).clamp(8.0, 15.0));
                 let galley = painter.layout(
                     branch.name.clone(),
@@ -1404,7 +1431,7 @@ impl Workbench {
             let pressure = self.pressure(n.id);
             let color = if self.overlay == Overlay::Floor {
                 self.floor_color(n.floor)
-            } else if !circuit_mode && self.overlay == Overlay::Pressure {
+            } else if self.overlay == Overlay::Pressure {
                 pressure.map_or(p.accent, |v| diverge(v, p))
             } else if n.kind.fixed_gauge_pa().is_some() {
                 p.muted
@@ -1412,6 +1439,19 @@ impl Workbench {
                 p.accent
             };
             let r = item.rect;
+            if circuit_mode {
+                draw_circuit_node(&painter, item, n, p, color, camera.zoom, selected);
+                if let Some(pa) = pressure.filter(|_| selected) {
+                    painter.text(
+                        r.center() + vec2(5.0, 7.0),
+                        Align2::LEFT_TOP,
+                        format!("{pa:+.1} Pa"),
+                        FontId::monospace(10.0),
+                        p.muted,
+                    );
+                }
+                continue;
+            }
             if item.inline {
                 painter.circle(
                     r.center(),
@@ -1485,86 +1525,54 @@ impl Workbench {
                     (r.width() - offset * 2.0).max(8.0),
                 );
                 let title_at = at + vec2(0.0, fs(14.0));
-                let bottom = if circuit_mode {
-                    r.bottom() - 2.0
-                } else {
-                    r.bottom() - fs(20.0)
-                };
+                let bottom = r.bottom() - fs(20.0);
                 painter
                     .with_clip_rect(Rect::from_min_max(
                         r.min,
                         pos2(r.right(), bottom.max(title_at.y)),
                     ))
                     .galley(title_at, name, tint(p.text, item.opacity));
-                if !circuit_mode {
-                    let detail = if let Some(riser) = landing {
-                        let other = if riser.from == n.id {
-                            riser.to
-                        } else {
-                            riser.from
-                        };
-                        net.node(other)
-                            .and_then(|node| net.floor(node.floor))
-                            .map_or_else(
-                                || "Riser landing".into(),
-                                |f| {
-                                    let own = net
-                                        .floor(n.floor)
-                                        .map_or("Floor", |floor| floor.name.as_str());
-                                    if n.floor == net.node(other).unwrap().floor {
-                                        format!(
-                                            "{own} · rise {:.1} m",
-                                            (riser.end_elevation_m - riser.start_elevation_m).abs()
-                                        )
-                                    } else {
-                                        format!("{own} → {}", f.name)
-                                    }
-                                },
-                            )
-                    } else if let Some(p) = pressure {
-                        format!("{p:+.2} Pa")
+                let detail = if let Some(riser) = landing {
+                    let other = if riser.from == n.id {
+                        riser.to
                     } else {
-                        match n.kind {
-                            NodeKind::Room { volume_m3, .. } => format!("{volume_m3:.1} m³"),
-                            NodeKind::Boundary { gauge_pa } => format!("{gauge_pa:+.1} Pa"),
-                            NodeKind::Atmosphere => "0.0 Pa gauge".into(),
-                            NodeKind::Junction => "ΣQ = 0".into(),
-                        }
+                        riser.from
                     };
-                    painter.text(
-                        r.left_bottom() + vec2(offset, -offset),
-                        Align2::LEFT_BOTTOM,
-                        detail,
-                        FontId::monospace(fs(11.0)),
-                        tint(color, item.opacity),
-                    );
-                }
-            }
-            if circuit_mode && !matches!(n.kind, NodeKind::Junction) {
-                let scale = camera.zoom.max(0.4);
-                let origin = r.center_bottom() + vec2(0.0, 15.0 * scale);
-                painter.line_segment(
-                    [r.center_bottom(), origin - vec2(0.0, 8.0 * scale)],
-                    Stroke::new(1.2_f32, color),
+                    net.node(other)
+                        .and_then(|node| net.floor(node.floor))
+                        .map_or_else(
+                            || "Riser landing".into(),
+                            |f| {
+                                let own = net
+                                    .floor(n.floor)
+                                    .map_or("Floor", |floor| floor.name.as_str());
+                                if n.floor == net.node(other).unwrap().floor {
+                                    format!(
+                                        "{own} · rise {:.1} m",
+                                        (riser.end_elevation_m - riser.start_elevation_m).abs()
+                                    )
+                                } else {
+                                    format!("{own} → {}", f.name)
+                                }
+                            },
+                        )
+                } else if let Some(p) = pressure {
+                    format!("{p:+.2} Pa")
+                } else {
+                    match n.kind {
+                        NodeKind::Room { volume_m3, .. } => format!("{volume_m3:.1} m³"),
+                        NodeKind::Boundary { gauge_pa } => format!("{gauge_pa:+.1} Pa"),
+                        NodeKind::Atmosphere => "0.0 Pa gauge".into(),
+                        NodeKind::Junction => "ΣQ = 0".into(),
+                    }
+                };
+                painter.text(
+                    r.left_bottom() + vec2(offset, -offset),
+                    Align2::LEFT_BOTTOM,
+                    detail,
+                    FontId::monospace(fs(11.0)),
+                    tint(color, item.opacity),
                 );
-                draw_symbol(
-                    &painter,
-                    origin,
-                    circuit::node_element(n, net.air).symbol,
-                    color,
-                    scale,
-                );
-                if let Some(pressure) = pressure
-                    && (selected || r.height() >= 54.0)
-                {
-                    painter.text(
-                        origin + vec2(13.0 * scale, 0.0),
-                        Align2::LEFT_CENTER,
-                        format!("{pressure:+.2} Pa"),
-                        FontId::monospace((10.0 * scale).clamp(8.0, 16.0)),
-                        color,
-                    );
-                }
             }
             if !circuit_mode
                 && editable_pane
@@ -1932,7 +1940,29 @@ impl Workbench {
                 (camera.zoom * 100.0).round()
             ),
         );
-        if !circuit_mode {
+        if circuit_mode && self.overlay == Overlay::System {
+            let mut systems = [false; System::ALL.len()];
+            for w in &wires {
+                if let Some(branch) = net.branch(w.id) {
+                    systems[branch.system as usize] = true;
+                }
+            }
+            let mut at = rect.left_bottom() + vec2(16.0, -15.0);
+            let font = FontId::proportional(11.0);
+            for system in System::ALL.into_iter().filter(|s| systems[*s as usize]) {
+                let label = painter.layout_no_wrap(system.label().into(), font.clone(), p.muted);
+                painter.line_segment(
+                    [at, at + vec2(13.0, 0.0)],
+                    Stroke::new(1.7_f32, self.color(system)),
+                );
+                painter.galley(
+                    at + vec2(19.0, -label.size().y * 0.5),
+                    label.clone(),
+                    p.muted,
+                );
+                at.x += label.size().x + 32.0;
+            }
+        } else if !circuit_mode {
             let text = match self.overlay {
                 Overlay::Floor => "FLOORS  •  Colors match the floor list",
                 Overlay::System => "SYSTEM  •  Supply / exhaust / transfer",
@@ -2628,37 +2658,24 @@ impl Workbench {
             self.cameras[idx] = Camera::default();
             return;
         }
-        if let Some(layout) = &layout {
-            let mut detours = 0;
-            let top = bounds.top();
+        if layout.is_some() && focus.is_none() {
             for b in &self.project.network.branches {
-                if focus
-                    .as_ref()
-                    .is_some_and(|(id, _)| *id != b.from && *id != b.to)
-                    || ![b.from, b.to].into_iter().all(|id| {
-                        self.project
-                            .network
-                            .node(id)
-                            .is_some_and(|n| visible(n.floor))
-                    })
-                {
-                    continue;
-                }
-                if focus.is_none()
-                    && let Some(&[x, y]) = self.project.drawing.circuit.get(&b.id)
+                if [b.from, b.to].into_iter().all(|id| {
+                    self.project
+                        .network
+                        .node(id)
+                        .is_some_and(|n| visible(n.floor))
+                }) && let Some(&[x, y]) = self.project.drawing.circuit.get(&b.id)
                 {
                     bounds.extend_with(pos2(x, y));
-                } else if let (Some(from), Some(to)) = (layout.get(&b.from), layout.get(&b.to))
-                    && circuit_detour(to[0] - from[0])
-                {
-                    detours += 1;
                 }
             }
-            if detours > 0 {
-                bounds.min.y = bounds.min.y.min(top - 60.0 - 48.0 * (detours - 1) as f32);
-            }
         }
-        bounds = bounds.expand2(vec2(106.0, 76.0));
+        bounds = bounds.expand2(if idx == 1 {
+            vec2(132.0, 76.0)
+        } else {
+            vec2(106.0, 76.0)
+        });
         let zoom = (rect.width() / bounds.width())
             .min(rect.height() / bounds.height())
             .clamp(0.25, 1.25);
@@ -2796,92 +2813,161 @@ fn side_port(rect: Rect, side: PortSide) -> Pos2 {
     }
 }
 
-fn draw_circuit_stages(painter: &Painter, nodes: &[NodeDraw], p: Palette, zoom: f32) {
-    let mut nodes: Vec<_> = nodes.iter().collect();
-    nodes.sort_by(|a, b| a.rect.center().x.total_cmp(&b.rect.center().x));
-    let Some(top) = nodes.iter().map(|n| n.rect.top()).min_by(f32::total_cmp) else {
-        return;
+fn circuit_wire(
+    [from, to]: [Pos2; 2],
+    count: usize,
+    at: Pos2,
+    axis: Vec2,
+    zoom: f32,
+) -> (CircuitWire, Rect) {
+    let vertical = axis.y != 0.0;
+    let length = (32.0 + (count - 1) as f32 * 44.0) * zoom;
+    let points = if vertical {
+        let extent = axis * (length * 0.5 + 7.0 * zoom);
+        let entry = (axis.y * from.y).min(axis.y * (at.y - extent.y)) * axis.y;
+        let exit = (axis.y * to.y).max(axis.y * (at.y + extent.y)) * axis.y;
+        vec![
+            from,
+            pos2(at.x, from.y),
+            pos2(at.x, entry),
+            pos2(at.x, exit),
+            pos2(at.x, to.y),
+            to,
+        ]
+    } else {
+        let extent = axis * (length * 0.5 + 7.0 * zoom);
+        let entry = (axis.x * from.x).min(axis.x * (at.x - extent.x)) * axis.x;
+        let exit = (axis.x * to.x).max(axis.x * (at.x + extent.x)) * axis.x;
+        let lead = (from.x - to.x).abs().min(46.0 * zoom) * 0.5 * axis.x;
+        let entry = if axis.x * (from.x + lead) < axis.x * (at.x - extent.x) {
+            from.x + lead
+        } else {
+            entry
+        };
+        let exit = if axis.x * (to.x - lead) > axis.x * (at.x + extent.x) {
+            to.x - lead
+        } else {
+            exit
+        };
+        vec![
+            from,
+            pos2(entry, from.y),
+            pos2(entry, at.y),
+            pos2(exit, at.y),
+            pos2(exit, to.y),
+            to,
+        ]
     };
-    let bottom = nodes.iter().map(|n| n.rect.bottom()).fold(top, f32::max);
-    for (index, column) in nodes
-        .chunk_by(|a, b| a.rect.center().x == b.rect.center().x)
-        .enumerate()
-    {
-        let x = column[0].rect.center().x;
-        let bounds = Rect::from_min_max(
-            pos2(x - 83.0 * zoom, top - 25.0 * zoom),
-            pos2(x + 83.0 * zoom, bottom + 35.0 * zoom),
+    let size = if vertical {
+        vec2(24.0 * zoom, length)
+    } else {
+        vec2(length, 24.0 * zoom)
+    };
+    (
+        CircuitWire { points, axis },
+        Rect::from_center_size(at, size),
+    )
+}
+
+fn draw_circuit_branch(
+    p: &Painter,
+    w: &Wire,
+    branch: &Branch,
+    air: Air,
+    zoom: f32,
+    palette: Palette,
+    hot: bool,
+) {
+    let route = w.circuit.as_ref().expect("circuit wire");
+    let stroke = Stroke::new(if hot { 2.1 } else { 1.25_f32 }, w.color);
+    p.add(Shape::line(route.points.clone(), stroke));
+    let elements = circuit::branch_elements(branch, air);
+    let count = circuit::branch_elements(branch, air).count();
+    for (i, el) in elements.enumerate() {
+        let center = route.symbol_center(w.badge, i, count, zoom);
+        let span = 14.5 * zoom;
+        p.line_segment(
+            [center - route.axis * span, center + route.axis * span],
+            Stroke::new(stroke.width + 2.0, palette.canvas),
         );
-        painter.rect(
-            bounds,
-            3,
-            p.surface.gamma_multiply(0.36),
-            Stroke::new(1.0_f32, p.edge),
-            StrokeKind::Inside,
+        draw_symbol(p, center, el.symbol, w.color, zoom, route.axis);
+    }
+    let vertical = route.axis.y != 0.0;
+    let (point, anchor) = if vertical {
+        (w.badge.right_center() + vec2(5.0, 0.0), Align2::LEFT_CENTER)
+    } else {
+        (w.badge.center_bottom() + vec2(0.0, 2.0), Align2::CENTER_TOP)
+    };
+    if zoom >= 0.38 || hot {
+        let label = p.layout(
+            branch.name.clone(),
+            FontId::proportional((12.0 * zoom).clamp(8.0, 16.0)),
+            if hot { palette.text } else { palette.muted },
+            (155.0 * zoom).max(70.0),
         );
-        painter.text(
-            bounds.center_top() + vec2(0.0, 5.0 * zoom),
-            Align2::CENTER_TOP,
-            format!("Stage {}", index + 1),
-            FontId::monospace((12.0 * zoom).max(8.0)),
-            p.muted,
-        );
+        let text_rect = anchor.anchor_size(point, label.size());
+        p.rect_filled(text_rect.expand(1.0), 0, palette.canvas);
+        p.galley(text_rect.min, label, palette.text);
     }
 }
 
-fn circuit_detour(span: f32) -> bool {
-    !(140.0..=400.0).contains(&span)
-}
-
-fn circuit_wire(
-    [from, to]: [&NodeDraw; 2],
-    count: usize,
-    manual: Option<Pos2>,
-    return_y: Option<f32>,
-    offset: f32,
-    slots: [f32; 2],
+fn draw_circuit_node(
+    p: &Painter,
+    item: &NodeDraw,
+    node: &Node,
+    palette: Palette,
+    color: Color32,
     zoom: f32,
-) -> (CircuitWire, Rect) {
-    let badge_width = 38.0 + (count - 1) as f32 * 54.0;
-    let midpoint = from.rect.center().lerp(to.rect.center(), 0.5);
-    let at =
-        manual.unwrap_or_else(|| pos2(midpoint.x, return_y.unwrap_or(midpoint.y) + offset * zoom));
-    let forward = to.rect.center().x > from.rect.center().x || return_y.is_some();
-    let (source_side, dest_side) = if forward {
-        (PortSide::Right, PortSide::Left)
-    } else {
-        (PortSide::Left, PortSide::Right)
+    selected: bool,
+) {
+    let at = item.rect.center();
+    let scale = zoom.max(0.4);
+    let ground = vec2(0.0, 1.0);
+    if selected {
+        p.circle_filled(at, 7.0, palette.raised);
+        p.circle_stroke(at, 7.0, Stroke::new(1.2_f32, palette.accent));
+    }
+    p.circle_filled(at, (3.0 * zoom).max(2.0), color);
+    let symbol = match node.kind {
+        NodeKind::Room { .. } => Symbol::Capacitor,
+        NodeKind::Boundary { .. } | NodeKind::Atmosphere => Symbol::Ground,
+        NodeKind::Junction => Symbol::Junction,
     };
-    let start = from.port(source_side) + vec2(0.0, if from.inline { 0.0 } else { slots[0] * zoom });
-    let end = to.port(dest_side) + vec2(0.0, if to.inline { 0.0 } else { slots[1] * zoom });
-    let port_sign = if forward { 1.0 } else { -1.0 };
-    let lead = if return_y.is_some() { 42.0 } else { 19.0 };
-    let left_bend = start.x + port_sign * (lead + slots[0] * 0.45) * zoom;
-    let right_bend = end.x - port_sign * (lead + slots[1] * 0.45) * zoom;
-    let direction = if left_bend <= right_bend { 1.0 } else { -1.0 };
-    let extent = (badge_width * 0.5 + 6.0) * zoom;
-    let entry = if direction > 0.0 {
-        left_bend.min(at.x - extent)
-    } else {
-        left_bend.max(at.x + extent)
-    };
-    let exit = if direction > 0.0 {
-        right_bend.max(at.x + extent)
-    } else {
-        right_bend.min(at.x - extent)
-    };
-    let points = [
-        start,
-        pos2(entry, start.y),
-        pos2(entry, at.y),
-        pos2(exit, at.y),
-        pos2(exit, end.y),
-        end,
-    ];
-    (
-        CircuitWire { points, direction },
-        Rect::from_center_size(at, vec2(badge_width, 24.0) * zoom),
-    )
+    if !matches!(symbol, Symbol::Junction) {
+        let terminal = at + ground * (12.0 * zoom);
+        let shunt = at + vec2(14.0, 29.0) * zoom;
+        p.add(Shape::line(
+            vec![
+                at,
+                terminal,
+                pos2(shunt.x, terminal.y),
+                shunt - ground * (8.0 * scale),
+            ],
+            Stroke::new(1.2_f32, color),
+        ));
+        draw_symbol(p, shunt, symbol, color, scale, Vec2::X);
+    }
+    if !item.inline || selected {
+        let font = FontId::proportional((14.0 * zoom).clamp(9.0, 17.0));
+        let text = p.layout(
+            node.name.clone(),
+            font,
+            palette.text,
+            (146.0 * zoom).max(64.0),
+        );
+        let point = at - vec2(5.0 * zoom, 8.0 * zoom);
+        let bounds = Align2::RIGHT_BOTTOM.anchor_size(point, text.size());
+        p.rect_filled(
+            bounds.expand(2.0),
+            2,
+            if selected {
+                palette.raised
+            } else {
+                palette.canvas
+            },
+        );
+        p.galley(bounds.min, text, palette.text);
+    }
 }
 fn facing_side(rect: Rect, target: Pos2) -> PortSide {
     if target.x < rect.center().x {
@@ -3000,8 +3086,9 @@ fn elevation_profile(painter: &Painter, r: Rect, b: &Branch, p: Palette) {
         );
     }
 }
-fn draw_symbol(p: &Painter, at: Pos2, symbol: Symbol, color: Color32, z: f32) {
-    let pt = |x, y| at + vec2(x, y) * z;
+fn draw_symbol(p: &Painter, at: Pos2, symbol: Symbol, color: Color32, z: f32, axis: Vec2) {
+    let normal = vec2(-axis.y, axis.x);
+    let pt = |x, y| at + (axis * x + normal * y) * z;
     let st = Stroke::new(1.4_f32, color);
     let line = |x, y, a, b| {
         p.line_segment([pt(x, y), pt(a, b)], st);

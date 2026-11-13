@@ -83,9 +83,25 @@ pub struct Download {
 
 enum Event {
     Current,
+    Available(Update),
     Progress { version: String, fraction: f32 },
     Ready(Download),
     Failed(String),
+}
+
+enum CheckStatus {
+    Unchecked,
+    Current,
+    Available(Update),
+    Failed(String),
+}
+
+#[derive(Clone)]
+struct Update {
+    version: String,
+    url: String,
+    size: u64,
+    digest: String,
 }
 
 pub struct Updater {
@@ -95,6 +111,7 @@ pub struct Updater {
     progress: Option<(String, f32)>,
     manual: bool,
     ready: Option<Download>,
+    status: CheckStatus,
 }
 
 impl Default for Updater {
@@ -110,6 +127,7 @@ impl Default for Updater {
             progress: None,
             manual: false,
             ready: None,
+            status: CheckStatus::Unchecked,
         }
     }
 }
@@ -120,18 +138,34 @@ impl Updater {
     }
 
     pub fn check(&mut self, ctx: &Context, manual: bool) {
-        if self.receiver.is_some() || self.ready.is_some() {
+        if self.receiver.is_some() {
+            self.manual |= manual;
             return;
         }
-        let Some(root) = self.root.clone() else {
+        if self.ready.is_some() {
             return;
-        };
+        }
+        if !self.installed() {
+            return;
+        }
         if !manual && Instant::now() < self.next_check {
             ctx.request_repaint_after(self.next_check.saturating_duration_since(Instant::now()));
             return;
         }
         self.next_check = Instant::now() + CHECK_INTERVAL;
         self.manual = manual;
+        self.start(ctx, |_| match latest() {
+            Ok(Some(update)) => Event::Available(update),
+            Ok(None) => Event::Current,
+            Err(error) => Event::Failed(error.to_string()),
+        });
+    }
+
+    fn start(
+        &mut self,
+        ctx: &Context,
+        task: impl FnOnce(&dyn Fn(Event)) -> Event + Send + 'static,
+    ) {
         let (send, receive) = mpsc::channel();
         self.receiver = Some(receive);
         let ctx = ctx.clone();
@@ -140,17 +174,31 @@ impl Updater {
                 let _ = send.send(event);
                 ctx.request_repaint();
             };
-            match download(&root, &report) {
-                Ok(Some(ready)) => report(Event::Ready(ready)),
-                Ok(None) => report(Event::Current),
-                Err(error) => report(Event::Failed(error.to_string())),
-            }
+            report(task(&report));
+        });
+    }
+
+    fn install(&mut self, ctx: &Context, update: Update) {
+        let Some(root) = self.root.clone() else {
+            return;
+        };
+        self.progress = Some((update.version.clone(), 0.0));
+        self.start(ctx, move |report| match download(&root, &update, report) {
+            Ok(ready) => Event::Ready(ready),
+            Err(error) => Event::Failed(error.to_string()),
         });
     }
 
     pub fn poll(&mut self) -> Option<(String, bool)> {
         let rx = self.receiver.as_ref()?;
-        while let Ok(event) = rx.try_recv() {
+        loop {
+            let event = match rx.try_recv() {
+                Ok(event) => event,
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    Event::Failed("The update task ended unexpectedly".into())
+                }
+            };
             match event {
                 Event::Progress { version, fraction } => self.progress = Some((version, fraction)),
                 Event::Ready(download) => {
@@ -160,13 +208,24 @@ impl Updater {
                 }
                 Event::Current => {
                     self.receiver = None;
+                    self.status = CheckStatus::Current;
                     if self.manual {
                         return Some(("Airframe is up to date".into(), false));
                     }
                     break;
                 }
+                Event::Available(update) => {
+                    self.receiver = None;
+                    let version = update.version.clone();
+                    self.status = CheckStatus::Available(update);
+                    if self.manual {
+                        return Some((format!("Airframe v{version} is available"), false));
+                    }
+                    break;
+                }
                 Event::Failed(error) => {
                     self.receiver = None;
+                    self.status = CheckStatus::Failed(error.clone());
                     let downloading = self.progress.take().is_some();
                     if self.manual || downloading {
                         return Some((format!("Update unavailable · {error}"), true));
@@ -176,6 +235,48 @@ impl Updater {
             }
         }
         None
+    }
+
+    pub fn controls(&mut self, ui: &mut egui::Ui) -> bool {
+        if !self.installed() {
+            ui.hyperlink_to(
+                "Windows releases",
+                format!("https://github.com/{REPO}/releases/latest"),
+            );
+            return false;
+        }
+        if let Some((version, _)) = &self.progress {
+            ui.label(format!("Downloading v{version}…"));
+        } else if self.receiver.is_some() {
+            ui.label("Checking for updates…");
+        } else if let CheckStatus::Available(update) = &self.status {
+            if ui
+                .button(format!("Update to v{}", update.version))
+                .clicked()
+            {
+                self.install(ui.ctx(), update.clone());
+                return true;
+            }
+        } else {
+            match &self.status {
+                CheckStatus::Current => {
+                    ui.label("Up to date");
+                }
+                CheckStatus::Failed(error) => {
+                    ui.label("Update check failed").on_hover_text(error);
+                }
+                _ => {}
+            }
+            let label = if matches!(self.status, CheckStatus::Current) {
+                "Check again"
+            } else {
+                "Check for updates"
+            };
+            if ui.button(label).clicked() {
+                self.check(ui.ctx(), true);
+            }
+        }
+        false
     }
 
     pub fn ready(&self) -> bool {
@@ -212,6 +313,7 @@ impl Updater {
             command.arg(path);
         }
         if let Err(error) = command.spawn() {
+            self.status = CheckStatus::Failed(error.to_string());
             let _ = fs::remove_file(ready.dir.join(SETUP));
             let _ = fs::remove_file(ready.dir.join("update.exe"));
             let _ = fs::remove_dir(&ready.dir);
@@ -230,8 +332,8 @@ impl Updater {
     }
 }
 
-fn download(root: &Path, report: &impl Fn(Event)) -> Result<Option<Download>, UpdateError> {
-    let client = Client::builder()
+fn update_client() -> Result<Client, reqwest::Error> {
+    Client::builder()
         .user_agent(concat!("Airframe/", env!("CARGO_PKG_VERSION")))
         .https_only(true)
         .connect_timeout(Duration::from_secs(10))
@@ -253,7 +355,11 @@ fn download(root: &Path, report: &impl Fn(Event)) -> Result<Option<Download>, Up
                 redirect.error("Unexpected release download redirect")
             }
         }))
-        .build()?;
+        .build()
+}
+
+fn latest() -> Result<Option<Update>, UpdateError> {
+    let client = update_client()?;
     let api = format!("https://api.github.com/repos/{REPO}/releases/latest");
     let release: Release = client
         .get(api)
@@ -265,7 +371,22 @@ fn download(root: &Path, report: &impl Fn(Event)) -> Result<Option<Download>, Up
     let Some((asset, digest)) = release.update(&current)? else {
         return Ok(None);
     };
-    let version = release.tag_name.trim_start_matches('v').to_owned();
+    Ok(Some(Update {
+        version: release.tag_name.trim_start_matches('v').to_owned(),
+        url: asset.browser_download_url.clone(),
+        size: asset.size,
+        digest: digest.into(),
+    }))
+}
+
+fn download(root: &Path, update: &Update, report: &dyn Fn(Event)) -> Result<Download, UpdateError> {
+    let client = update_client()?;
+    let Update {
+        version,
+        url,
+        size,
+        digest,
+    } = update;
     let dir = root.join("updates").join(Uuid::new_v4().to_string());
     fs::create_dir_all(&dir)?;
     let result = (|| {
@@ -273,10 +394,7 @@ fn download(root: &Path, report: &impl Fn(Event)) -> Result<Option<Download>, Up
             version: version.clone(),
             fraction: 0.0,
         });
-        let mut response = client
-            .get(&asset.browser_download_url)
-            .send()?
-            .error_for_status()?;
+        let mut response = client.get(url).send()?.error_for_status()?;
         let mut file = File::create(dir.join(SETUP))?;
         let mut checksum = Sha256::new();
         let mut bytes = 0_u64;
@@ -288,7 +406,7 @@ fn download(root: &Path, report: &impl Fn(Event)) -> Result<Option<Download>, Up
                 break;
             }
             bytes += read as u64;
-            if bytes > asset.size {
+            if bytes > *size {
                 return Err("The installer is larger than expected".into());
             }
             file.write_all(&buffer[..read])?;
@@ -296,22 +414,21 @@ fn download(root: &Path, report: &impl Fn(Event)) -> Result<Option<Download>, Up
             if last_progress.elapsed() >= Duration::from_millis(80) {
                 report(Event::Progress {
                     version: version.clone(),
-                    fraction: bytes as f32 / asset.size as f32,
+                    fraction: bytes as f32 / *size as f32,
                 });
                 last_progress = Instant::now();
             }
         }
-        if bytes != asset.size || !format!("{:x}", checksum.finalize()).eq_ignore_ascii_case(digest)
-        {
+        if bytes != *size || !format!("{:x}", checksum.finalize()).eq_ignore_ascii_case(digest) {
             return Err("The installer checksum does not match the GitHub release".into());
         }
         file.sync_all()?;
         fs::copy(std::env::current_exe()?, dir.join("update.exe"))?;
-        Ok(Some(Download {
+        Ok(Download {
             dir: dir.clone(),
-            version,
-            digest: digest.into(),
-        }))
+            version: version.clone(),
+            digest: digest.clone(),
+        })
     })();
     if result.is_err() {
         let _ = fs::remove_file(dir.join(SETUP));
@@ -480,5 +597,36 @@ impl eframe::App for InstallScreen {
                 }
             });
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_check_records_results_without_starting_a_download() {
+        let mut updater = Updater::default();
+        let deliver = |updater: &mut Updater, event| {
+            let (send, receive) = mpsc::channel();
+            send.send(event).unwrap();
+            updater.receiver = Some(receive);
+            updater.poll();
+        };
+        deliver(&mut updater, Event::Current);
+        assert!(matches!(updater.status, CheckStatus::Current));
+        deliver(
+            &mut updater,
+            Event::Available(Update {
+                version: "1.0.0".into(),
+                url: String::new(),
+                size: 1,
+                digest: String::new(),
+            }),
+        );
+        assert!(matches!(updater.status, CheckStatus::Available(_)));
+        assert!(updater.receiver.is_none() && updater.progress.is_none() && !updater.ready());
+        deliver(&mut updater, Event::Failed("offline".into()));
+        assert!(matches!(updater.status, CheckStatus::Failed(ref error) if error == "offline"));
     }
 }

@@ -8,7 +8,7 @@ Download **Airframe-Setup-x64.exe** from [the latest release](https://github.com
 
 The [quick start](docs/quick-start.md) shows where to open the example and solve it.
 
-The installed app checks GitHub for updates at startup and every six hours while it is open. You can also click the version number in the toolbar and choose **Check for updates**. When an update is available, Airframe downloads it, shows progress, installs it, and reopens with your work.
+The installed app checks GitHub for updates at startup and every six hours while it is open. Open **Settings → Airframe updates** to see the status or check manually. Select **Update to v…** to download and install an available release. Airframe shows progress and reopens with your work.
 
 To build from source, install [stable Rust](https://rustup.rs/) and the Visual Studio C++ build tools with a Windows SDK, then run this from the Program folder:
 
@@ -39,7 +39,7 @@ Run `./installer/build.ps1` with [NSIS](https://nsis.sourceforge.io/Download) in
 | Solve and export | Click **Solve airflow**, then **Results → Export Excel** for editable inputs and live formulas for the steady equations. The workbook opens at the Airframe solution. After changing inputs, use Excel Solver to rebalance a small network or re-solve in Airframe. CSV is also available. |
 | Adjust fan airflow | Use the airflow slider and switch between **Use fan curve** and **Use fixed airflow**. In curve mode the slider sets speed through the fan’s free-air rating. In the inspector, expand **Custom fan curve** and paste rated airflow and pressure pairs. |
 | Review startup | Choose **Fan startup → Run startup** below the canvas or in **Results**. Scrub or play the timeline to inspect flows and pressures from the transient run. |
-| Navigate and arrange | Scroll to zoom up to 1000%. Right-drag or middle-drag to pan. **Arrange** spaces connected nodes. With a floor plan shown it opens the circuit layout. **Circuit → Full network** shows downstream stages with right-angle wiring and separate duct resistors and inductors. Use **Arrange** to restore the automatic circuit layout or **Room focus** to see a room and its direct connections. |
+| Navigate and arrange | Scroll to zoom up to 1000%. Right-drag or middle-drag to pan. **Arrange** spaces connected nodes. With a floor plan shown it opens the circuit layout. **Circuit → Full network** draws supply-to-extract runs on horizontal rows with vertical links for doors and risers. Duct resistors and inductors appear separately on the wire. Use **Arrange** to restore the automatic circuit layout or **Room focus** to see a room and its direct connections. |
 | Import a drawing | Use **Layers → Import floor plan image** and pick a PNG or JPEG. The project references the image file; keep it available alongside the project when sharing. |
 | Save and recover | Use **File → Save project** or **Save as**. Airframe records unsaved edits in a separate recovery copy about every five seconds. After a crash, choose **Recover** at startup or use **File → Recover unsaved work…**. |
 
