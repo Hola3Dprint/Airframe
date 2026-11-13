@@ -1,0 +1,7 @@
+/target/
+/dist/
+/projects/local/
+*.autosave.json
+*.airflow.local.json
+*.local.md
+*.csv

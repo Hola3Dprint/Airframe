@@ -1,0 +1,153 @@
+{
+  "schema": 1,
+  "name": "Single-room airflow",
+  "notes": "Benchmark: 600 m³/h exhaust through a passive inlet, giving a −50 Pa operating point. Try changing the fan airflow and solving again.",
+  "network": {
+    "air": {
+      "absolute_pa": 101325.0,
+      "density": 1.204,
+      "viscosity": 0.0000181
+    },
+    "floors": [
+      {
+        "id": "91bde25f-c713-445a-ac74-84aa376b5ea9",
+        "name": "Level 01",
+        "elevation_m": 0.0,
+        "visible": true,
+        "locked": false
+      }
+    ],
+    "nodes": [
+      {
+        "id": "e3ea7af8-d2c4-4b10-bf6d-f9865ab6e095",
+        "name": "Outdoor intake",
+        "floor": "91bde25f-c713-445a-ac74-84aa376b5ea9",
+        "kind": {
+          "type": "boundary",
+          "gauge_pa": 0.0
+        }
+      },
+      {
+        "id": "599e4ccc-8d60-42aa-add6-873bc53ad846",
+        "name": "Test room",
+        "floor": "91bde25f-c713-445a-ac74-84aa376b5ea9",
+        "kind": {
+          "type": "room",
+          "volume_m3": 100.0,
+          "initial_pa": 0.0
+        }
+      },
+      {
+        "id": "b351cc67-251d-472b-9e1c-e2ce9272ee48",
+        "name": "Outdoor discharge",
+        "floor": "91bde25f-c713-445a-ac74-84aa376b5ea9",
+        "kind": {
+          "type": "boundary",
+          "gauge_pa": 0.0
+        }
+      }
+    ],
+    "branches": [
+      {
+        "id": "470971d8-54ce-4f7c-b08c-2c9ee30a178c",
+        "name": "Passive inlet",
+        "from": "e3ea7af8-d2c4-4b10-bf6d-f9865ab6e095",
+        "to": "599e4ccc-8d60-42aa-add6-873bc53ad846",
+        "system": "outdoor",
+        "start_elevation_m": 0.0,
+        "end_elevation_m": 0.0,
+        "kind": {
+          "type": "opening",
+          "k": 1800.0
+        }
+      },
+      {
+        "id": "a8e4c844-86d5-48ea-845a-ef99f9dc2174",
+        "name": "Exhaust fan",
+        "from": "599e4ccc-8d60-42aa-add6-873bc53ad846",
+        "to": "b351cc67-251d-472b-9e1c-e2ce9272ee48",
+        "system": "exhaust",
+        "start_elevation_m": 0.0,
+        "end_elevation_m": 0.0,
+        "kind": {
+          "type": "flow_fan",
+          "design_m3_s": 0.16666666666666666,
+          "tau_s": 5.0
+        }
+      }
+    ]
+  },
+  "drawing": {
+    "positions": {
+      "599e4ccc-8d60-42aa-add6-873bc53ad846": [
+        0.0,
+        10.0
+      ],
+      "b351cc67-251d-472b-9e1c-e2ce9272ee48": [
+        280.0,
+        10.0
+      ],
+      "e3ea7af8-d2c4-4b10-bf6d-f9865ab6e095": [
+        -280.0,
+        10.0
+      ]
+    },
+    "sizes": {},
+    "circuit": {},
+    "bends": {},
+    "grid": true,
+    "snap": true,
+    "background_opacity": 0.38,
+    "colors": [
+      [
+        104,
+        171,
+        255
+      ],
+      [
+        79,
+        205,
+        188
+      ],
+      [
+        255,
+        165,
+        110
+      ],
+      [
+        191,
+        145,
+        255
+      ],
+      [
+        82,
+        219,
+        159
+      ],
+      [
+        157,
+        173,
+        192
+      ]
+    ],
+    "light": false
+  },
+  "scenarios": [
+    {
+      "name": "Startup / shutdown",
+      "duration_s": 120.0,
+      "events": [
+        {
+          "fan": "a8e4c844-86d5-48ea-845a-ef99f9dc2174",
+          "time_s": 0.0,
+          "command": 1.0
+        },
+        {
+          "fan": "a8e4c844-86d5-48ea-845a-ef99f9dc2174",
+          "time_s": 60.0,
+          "command": 0.0
+        }
+      ]
+    }
+  ]
+}

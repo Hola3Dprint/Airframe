@@ -1,0 +1,353 @@
+{
+  "schema": 1,
+  "name": "Two-floor ventilation",
+  "notes": "Synthetic example for testing stacked routes and a connected riser. Elevations describe the layout; stack pressure is not modeled.",
+  "network": {
+    "air": {
+      "absolute_pa": 101325.0,
+      "density": 1.204,
+      "viscosity": 0.0000181
+    },
+    "floors": [
+      {
+        "id": "8daca85a-f021-4f9a-ab05-c02debc30ebe",
+        "name": "Level 01",
+        "elevation_m": 0.0,
+        "visible": true,
+        "locked": false
+      },
+      {
+        "id": "5a18238b-8631-4273-bb83-d52e892a2bd2",
+        "name": "Level 02",
+        "elevation_m": 4.0,
+        "visible": true,
+        "locked": false
+      }
+    ],
+    "nodes": [
+      {
+        "id": "9be92cb0-d8bb-428c-ad5a-185f878d45ff",
+        "name": "Outdoor intake",
+        "floor": "8daca85a-f021-4f9a-ab05-c02debc30ebe",
+        "kind": {
+          "type": "boundary",
+          "gauge_pa": 0.0
+        }
+      },
+      {
+        "id": "d956af92-bc2e-4bd1-a19d-61e33d6e475c",
+        "name": "Main corridor",
+        "floor": "8daca85a-f021-4f9a-ab05-c02debc30ebe",
+        "kind": {
+          "type": "room",
+          "volume_m3": 100.0,
+          "initial_pa": 0.0
+        }
+      },
+      {
+        "id": "efbd2ac5-5e89-4cd6-a9aa-788c7ea5af73",
+        "name": "Studio 01",
+        "floor": "8daca85a-f021-4f9a-ab05-c02debc30ebe",
+        "kind": {
+          "type": "room",
+          "volume_m3": 100.0,
+          "initial_pa": 0.0
+        }
+      },
+      {
+        "id": "a8cd9913-969f-4ab6-be35-425710b10ef3",
+        "name": "Studio 02",
+        "floor": "8daca85a-f021-4f9a-ab05-c02debc30ebe",
+        "kind": {
+          "type": "room",
+          "volume_m3": 100.0,
+          "initial_pa": 0.0
+        }
+      },
+      {
+        "id": "bc9461b5-b6ed-4539-9e9d-43ca18fda0d9",
+        "name": "Studio 03",
+        "floor": "5a18238b-8631-4273-bb83-d52e892a2bd2",
+        "kind": {
+          "type": "room",
+          "volume_m3": 100.0,
+          "initial_pa": 0.0
+        }
+      },
+      {
+        "id": "e2bda939-80ee-45ae-9d9f-98c28ed1a6cb",
+        "name": "Studio 04",
+        "floor": "5a18238b-8631-4273-bb83-d52e892a2bd2",
+        "kind": {
+          "type": "room",
+          "volume_m3": 100.0,
+          "initial_pa": 0.0
+        }
+      },
+      {
+        "id": "ad664c44-4419-487c-817c-ad97f0209015",
+        "name": "Outdoor discharge",
+        "floor": "5a18238b-8631-4273-bb83-d52e892a2bd2",
+        "kind": {
+          "type": "boundary",
+          "gauge_pa": 0.0
+        }
+      },
+      {
+        "id": "5bb644da-5b87-4738-a93d-efd5fa2779b8",
+        "name": "Exhaust junction",
+        "floor": "5a18238b-8631-4273-bb83-d52e892a2bd2",
+        "kind": {
+          "type": "junction"
+        }
+      }
+    ],
+    "branches": [
+      {
+        "id": "9298db40-07a1-460e-8587-0e0feaddbe0b",
+        "name": "Supply fan",
+        "from": "9be92cb0-d8bb-428c-ad5a-185f878d45ff",
+        "to": "d956af92-bc2e-4bd1-a19d-61e33d6e475c",
+        "system": "supply",
+        "start_elevation_m": 0.0,
+        "end_elevation_m": 0.0,
+        "kind": {
+          "type": "flow_fan",
+          "design_m3_s": 0.2,
+          "tau_s": 5.0
+        }
+      },
+      {
+        "id": "1693d290-ffb4-46d5-97d7-c53f5c9aa7b1",
+        "name": "Lower transfer duct",
+        "from": "d956af92-bc2e-4bd1-a19d-61e33d6e475c",
+        "to": "efbd2ac5-5e89-4cd6-a9aa-788c7ea5af73",
+        "system": "transfer",
+        "start_elevation_m": 0.0,
+        "end_elevation_m": 0.0,
+        "kind": {
+          "type": "duct",
+          "duct": {
+            "section": {
+              "shape": "round",
+              "diameter_m": 0.25
+            },
+            "length_m": 5.0,
+            "roughness_m": 0.00009,
+            "minor_k": 1.0
+          },
+          "riser": false
+        }
+      },
+      {
+        "id": "824c90a0-a101-4176-952b-e8e083a91f30",
+        "name": "Upper transfer duct",
+        "from": "bc9461b5-b6ed-4539-9e9d-43ca18fda0d9",
+        "to": "e2bda939-80ee-45ae-9d9f-98c28ed1a6cb",
+        "system": "transfer",
+        "start_elevation_m": 4.0,
+        "end_elevation_m": 4.0,
+        "kind": {
+          "type": "duct",
+          "duct": {
+            "section": {
+              "shape": "round",
+              "diameter_m": 0.25
+            },
+            "length_m": 5.0,
+            "roughness_m": 0.00009,
+            "minor_k": 1.0
+          },
+          "riser": false
+        }
+      },
+      {
+        "id": "03d8f343-2f73-4aff-a7d4-9842f91200e2",
+        "name": "Door transfer",
+        "from": "efbd2ac5-5e89-4cd6-a9aa-788c7ea5af73",
+        "to": "a8cd9913-969f-4ab6-be35-425710b10ef3",
+        "system": "transfer",
+        "start_elevation_m": 0.0,
+        "end_elevation_m": 0.0,
+        "kind": {
+          "type": "opening",
+          "k": 500.0
+        }
+      },
+      {
+        "id": "8fb7a0a5-bad4-4fe7-8bfe-8e62d18b761d",
+        "name": "Relief",
+        "from": "a8cd9913-969f-4ab6-be35-425710b10ef3",
+        "to": "9be92cb0-d8bb-428c-ad5a-185f878d45ff",
+        "system": "outdoor",
+        "start_elevation_m": 0.0,
+        "end_elevation_m": 0.0,
+        "kind": {
+          "type": "opening",
+          "k": 800.0
+        }
+      },
+      {
+        "id": "60333cad-bb5e-40e7-a4c5-c975428eb00d",
+        "name": "Vertical riser",
+        "from": "d956af92-bc2e-4bd1-a19d-61e33d6e475c",
+        "to": "bc9461b5-b6ed-4539-9e9d-43ca18fda0d9",
+        "system": "supply",
+        "start_elevation_m": 0.0,
+        "end_elevation_m": 4.0,
+        "kind": {
+          "type": "duct",
+          "duct": {
+            "section": {
+              "shape": "round",
+              "diameter_m": 0.25
+            },
+            "length_m": 4.0,
+            "roughness_m": 0.00009,
+            "minor_k": 1.0
+          },
+          "riser": true
+        }
+      },
+      {
+        "id": "5b2906a7-6c8c-4c3e-97f7-06ece0f7a48d",
+        "name": "Exhaust duct",
+        "from": "e2bda939-80ee-45ae-9d9f-98c28ed1a6cb",
+        "to": "5bb644da-5b87-4738-a93d-efd5fa2779b8",
+        "system": "exhaust",
+        "start_elevation_m": 4.0,
+        "end_elevation_m": 4.0,
+        "kind": {
+          "type": "duct",
+          "duct": {
+            "section": {
+              "shape": "round",
+              "diameter_m": 0.25
+            },
+            "length_m": 5.0,
+            "roughness_m": 0.00009,
+            "minor_k": 1.0
+          },
+          "riser": false
+        }
+      },
+      {
+        "id": "b6998ccd-d02a-4019-97bf-8b348093bb8a",
+        "name": "Exhaust fan",
+        "from": "5bb644da-5b87-4738-a93d-efd5fa2779b8",
+        "to": "ad664c44-4419-487c-817c-ad97f0209015",
+        "system": "exhaust",
+        "start_elevation_m": 4.0,
+        "end_elevation_m": 4.0,
+        "kind": {
+          "type": "flow_fan",
+          "design_m3_s": 0.16,
+          "tau_s": 5.0
+        }
+      }
+    ]
+  },
+  "drawing": {
+    "positions": {
+      "5bb644da-5b87-4738-a93d-efd5fa2779b8": [
+        280.0,
+        -145.0
+      ],
+      "9be92cb0-d8bb-428c-ad5a-185f878d45ff": [
+        -300.0,
+        -120.0
+      ],
+      "a8cd9913-969f-4ab6-be35-425710b10ef3": [
+        240.0,
+        165.0
+      ],
+      "ad664c44-4419-487c-817c-ad97f0209015": [
+        -115.0,
+        -145.0
+      ],
+      "bc9461b5-b6ed-4539-9e9d-43ca18fda0d9": [
+        -20.0,
+        0.0
+      ],
+      "d956af92-bc2e-4bd1-a19d-61e33d6e475c": [
+        -20.0,
+        0.0
+      ],
+      "e2bda939-80ee-45ae-9d9f-98c28ed1a6cb": [
+        255.0,
+        0.0
+      ],
+      "efbd2ac5-5e89-4cd6-a9aa-788c7ea5af73": [
+        255.0,
+        0.0
+      ]
+    },
+    "sizes": {},
+    "circuit": {},
+    "bends": {},
+    "grid": true,
+    "snap": true,
+    "background_opacity": 0.38,
+    "colors": [
+      [
+        104,
+        171,
+        255
+      ],
+      [
+        79,
+        205,
+        188
+      ],
+      [
+        255,
+        165,
+        110
+      ],
+      [
+        191,
+        145,
+        255
+      ],
+      [
+        82,
+        219,
+        159
+      ],
+      [
+        157,
+        173,
+        192
+      ]
+    ],
+    "light": false
+  },
+  "scenarios": [
+    {
+      "name": "Startup / shutdown",
+      "duration_s": 120.0,
+      "events": [
+        {
+          "fan": "9298db40-07a1-460e-8587-0e0feaddbe0b",
+          "time_s": 0.0,
+          "command": 1.0
+        },
+        {
+          "fan": "9298db40-07a1-460e-8587-0e0feaddbe0b",
+          "time_s": 75.0,
+          "command": 0.0
+        },
+        {
+          "fan": "b6998ccd-d02a-4019-97bf-8b348093bb8a",
+          "time_s": 10.0,
+          "command": 1.0
+        },
+        {
+          "fan": "b6998ccd-d02a-4019-97bf-8b348093bb8a",
+          "time_s": 60.0,
+          "command": 0.0
+        }
+      ]
+    }
+  ]
+}

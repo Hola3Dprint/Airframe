@@ -1,0 +1,16 @@
+[package]
+name = "airflow"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+petgraph = "0.8"
+diffsol = { version = "0.19", default-features = false, features = ["nalgebra"] }
+nalgebra = "0.35"
+csv = "1"
+rust_xlsxwriter = "0.102.0"

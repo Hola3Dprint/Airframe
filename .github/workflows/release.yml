@@ -1,0 +1,36 @@
+name: Windows release
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal
+      - name: Validate release tag
+        run: |
+          $version = (cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json).packages |
+            Where-Object name -eq app | Select-Object -ExpandProperty version
+          if ($env:GITHUB_REF_NAME -ne "v$version") {
+            throw "The release tag must match the Cargo workspace version."
+          }
+      - name: Test Airframe
+        run: cargo test --workspace --locked
+      - name: Build Windows installer
+        run: ./installer/build.ps1
+      - name: Publish installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view $env:GITHUB_REF_NAME --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:GITHUB_REF_NAME dist/Airframe-Setup-x64.exe --repo $env:GITHUB_REPOSITORY
+          } else {
+            gh release create $env:GITHUB_REF_NAME dist/Airframe-Setup-x64.exe --repo $env:GITHUB_REPOSITORY --verify-tag --generate-notes
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
