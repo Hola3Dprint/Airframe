@@ -1,6 +1,6 @@
 use crate::{
     component_help,
-    layout::circuit_transfer,
+    layout::{circuit_room_taps, circuit_transfer},
     style::*,
     workbench::{LibraryDrag, Overlay, Part, View, Workbench, primary_press_in},
 };
@@ -743,6 +743,12 @@ impl Workbench {
             routes.push((b, a, z, group, *count));
             *count += 1;
         }
+        let [supply_drops, extract_taps] = if circuit_mode && focus.is_none() {
+            [circuit_room_taps(net, true), circuit_room_taps(net, false)]
+        } else {
+            Default::default()
+        };
+        let mut header_taps = Vec::new();
         let mut wires = Vec::with_capacity(routes.len());
         for (b, a, z, group, rank) in routes {
             let a_center = a.rect.center();
@@ -767,10 +773,20 @@ impl Workbench {
                     net.node(b.to).expect("visible destination"),
                 );
                 let delta = z_center - a_center;
-                let vertical =
-                    delta.y.abs() > camera.zoom && (transfer || delta.x.abs() < 95.0 * camera.zoom);
+                let supply_drop = supply_drops.contains(&b.id) && delta.y > camera.zoom;
+                let extract_tap = extract_taps.contains(&b.id) && delta.y > camera.zoom;
+                let vertical = delta.y.abs() > camera.zoom
+                    && (supply_drop
+                        || extract_tap
+                        || transfer
+                        || delta.x.abs() < 95.0 * camera.zoom);
                 let bounds = Rect::from_two_pos(a_center, z_center);
                 let mut at = manual.unwrap_or(bounds.center());
+                if supply_drop && manual.is_none() {
+                    at.x = z_center.x;
+                } else if extract_tap && manual.is_none() {
+                    at.x = a_center.x;
+                }
                 if manual.is_none()
                     && vertical
                     && nodes.iter().any(|n| {
@@ -807,6 +823,11 @@ impl Workbench {
                 };
                 let (route, badge) =
                     circuit_wire([a_center, z_center], count, at, axis, camera.zoom);
+                if supply_drop {
+                    header_taps.push((route.points[1], self.wire_color(b, p)));
+                } else if extract_tap {
+                    header_taps.push((route.points[4], self.wire_color(b, p)));
+                }
                 wires.push(Wire {
                     id: b.id,
                     points: [a_center, badge.center(), z_center],
@@ -1301,6 +1322,9 @@ impl Workbench {
                     );
                 }
             }
+        }
+        for (at, color) in header_taps {
+            painter.circle_filled(at, (3.0 * camera.zoom).max(2.0), color);
         }
         for w in wires
             .iter()

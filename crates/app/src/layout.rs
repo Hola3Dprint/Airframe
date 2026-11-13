@@ -17,6 +17,44 @@ pub(crate) fn circuit_transfer(b: &Branch, from: &Node, to: &Node) -> bool {
             && (b.aperture.is_some() || b.system == System::Transfer))
 }
 
+/// Find the room branches with a shared supply or extract node.
+pub(crate) fn circuit_room_taps(net: &Network, supply: bool) -> HashSet<Uuid> {
+    let mut rooms = HashMap::<Uuid, HashSet<Uuid>>::new();
+    let mut branches = Vec::new();
+    for b in &net.branches {
+        let (header, room) = if supply {
+            (b.from, b.to)
+        } else {
+            (b.to, b.from)
+        };
+        let (Some(header), Some(room)) = (net.node(header), net.node(room)) else {
+            continue;
+        };
+        let system = if supply {
+            matches!(
+                b.system,
+                System::Supply | System::Unassigned | System::Transfer
+            )
+        } else {
+            matches!(b.system, System::Exhaust | System::Return)
+        };
+        if header.floor == room.floor
+            && matches!(room.kind, NodeKind::Room { .. })
+            && !matches!(header.kind, NodeKind::Room { .. })
+            && system
+            && !circuit_transfer(b, header, room)
+        {
+            rooms.entry(header.id).or_default().insert(room.id);
+            branches.push((b.id, header.id));
+        }
+    }
+    branches
+        .into_iter()
+        .filter(|(_, header)| rooms[header].len() > 1)
+        .map(|(branch, _)| branch)
+        .collect()
+}
+
 impl Workbench {
     pub(crate) fn inline_port(&self, node: &Node) -> bool {
         self.project.drawing.inline_nodes.contains_key(&node.id)
@@ -113,6 +151,14 @@ impl Workbench {
 }
 
 fn circuit_layout(net: &Network) -> Positions {
+    let supply_drops = circuit_room_taps(net, true);
+    let extract_taps = circuit_room_taps(net, false);
+    let supplied_rooms: HashSet<_> = net
+        .branches
+        .iter()
+        .filter(|b| supply_drops.contains(&b.id))
+        .map(|b| b.to)
+        .collect();
     let indices: HashMap<_, _> = net
         .nodes
         .iter()
@@ -123,7 +169,11 @@ fn circuit_layout(net: &Network) -> Positions {
     for b in &net.branches {
         if let (Some(&a), Some(&z)) = (indices.get(&b.from), indices.get(&b.to)) {
             let transfer = circuit_transfer(b, &net.nodes[a], &net.nodes[z]);
-            outgoing[a].push((z, transfer));
+            outgoing[a].push((
+                z,
+                transfer || extract_taps.contains(&b.id),
+                supply_drops.contains(&b.id),
+            ));
         }
     }
     // A boundary feeding the network stays at the supply end, including when
@@ -135,7 +185,7 @@ fn circuit_layout(net: &Network) -> Positions {
         .map(|(n, next)| n.kind.fixed_gauge_pa().is_some() && !next.is_empty())
         .collect();
     let mut incoming = vec![0; net.nodes.len()];
-    for &(z, _) in outgoing.iter().flatten() {
+    for &(z, ..) in outgoing.iter().flatten() {
         if !sources[z] {
             incoming[z] += 1;
         }
@@ -153,7 +203,7 @@ fn circuit_layout(net: &Network) -> Positions {
     while let Some((_, a)) = pending.pop_first() {
         order_index[a] = order.len();
         order.push(a);
-        for &(z, _) in &outgoing[a] {
+        for &(z, ..) in &outgoing[a] {
             if !sources[z] && pending.remove(&(incoming[z], z)) {
                 incoming[z] -= 1;
                 pending.insert((incoming[z], z));
@@ -172,11 +222,30 @@ fn circuit_layout(net: &Network) -> Positions {
         // Continue one path along the current row. Doors, risers and
         // secondary branches join other rows at the current column.
         let mut continuation = None;
-        for &(z, transfer) in &outgoing[a] {
+        let mut room_row = None;
+        let mut room_column = column[a];
+        for &(z, transfer, drop) in &outgoing[a] {
             if order_index[z] <= order_index[a] {
                 continue;
             }
-            if !transfer && continuation.is_none() && row[z].is_none() {
+            if drop && row[z].is_none() {
+                let drop_row = *room_row.get_or_insert_with(|| {
+                    let next = rows;
+                    rows += 1;
+                    next
+                });
+                row[z] = Some(drop_row);
+                room_column += 1;
+                column[z] = column[z].max(room_column);
+                room_column = column[z];
+                continue;
+            }
+            if !transfer
+                && !supplied_rooms.contains(&net.nodes[z].id)
+                && !supplied_rooms.contains(&net.nodes[a].id)
+                && continuation.is_none()
+                && row[z].is_none()
+            {
                 row[z] = Some(lane);
                 continuation = Some(z);
             }
@@ -281,13 +350,12 @@ mod tests {
             (b, merge),
             (merge, outside),
         ] {
-            p.add_branch(
-                "Path",
-                from,
-                to,
-                System::Transfer,
-                BranchKind::Opening { k: 1.0 },
-            );
+            let system = if from == outside {
+                System::Outdoor
+            } else {
+                System::Transfer
+            };
+            p.add_branch("Path", from, to, system, BranchKind::Opening { k: 1.0 });
         }
         let layout = circuit_layout(&p.network);
         assert_eq!(layout[&outside][1], layout[&a][1]);
@@ -295,6 +363,48 @@ mod tests {
         assert_eq!(layout[&a][0], layout[&merge][0]);
         assert_ne!(layout[&a][1], layout[&b][1]);
         assert!(layout[&merge][1] > layout[&a][1] && layout[&merge][1] > layout[&b][1]);
+    }
+
+    #[test]
+    fn shared_supply_places_rooms_side_by_side_below_the_header() {
+        let mut p = Project::new("Parallel supply");
+        let floor = p.network.floors[0].id;
+        let room = NodeKind::Room {
+            volume_m3: 100.0,
+            initial_pa: 0.0,
+        };
+        let outside = p.add_node("Air intake", floor, NodeKind::Atmosphere, [0.0; 2]);
+        let supply = p.add_node("Supply header", floor, NodeKind::Junction, [0.0; 2]);
+        let a = p.add_node("Room A", floor, room, [0.0; 2]);
+        let b = p.add_node("Room B", floor, room, [0.0; 2]);
+        let extract = p.add_node("Extract", floor, NodeKind::Junction, [0.0; 2]);
+        let duct = BranchKind::Duct {
+            duct: Default::default(),
+            riser: false,
+        };
+        for (from, to) in [(outside, supply), (supply, a), (supply, b)] {
+            p.add_branch("Supply", from, to, System::Supply, duct);
+        }
+        for from in [a, b] {
+            p.add_branch("Extract", from, extract, System::Exhaust, duct);
+        }
+        let drops = circuit_room_taps(&p.network, true);
+        assert_eq!(
+            drops,
+            p.network.branches[1..3].iter().map(|b| b.id).collect()
+        );
+        assert_eq!(
+            circuit_room_taps(&p.network, false),
+            p.network.branches[3..].iter().map(|b| b.id).collect()
+        );
+        let layout = circuit_layout(&p.network);
+        assert_eq!(layout[&outside][1], layout[&supply][1]);
+        assert!(layout[&supply][1] < layout[&a][1]);
+        assert_eq!(layout[&a][1], layout[&b][1]);
+        assert!(layout[&supply][0] < layout[&a][0] && layout[&a][0] < layout[&b][0]);
+        assert_eq!(layout[&b][0], layout[&extract][0]);
+        assert!(layout[&b][1] < layout[&extract][1]);
+        assert_eq!(p.network.branches.len(), 5);
     }
 
     #[test]
