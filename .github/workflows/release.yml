@@ -2,6 +2,12 @@ name: Windows release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to rebuild
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -9,28 +15,47 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
+    env:
+      AIRFRAME_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - run: rustup toolchain install stable --profile minimal
       - name: Validate release tag
         run: |
           $version = (cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json).packages |
             Where-Object name -eq app | Select-Object -ExpandProperty version
-          if ($env:GITHUB_REF_NAME -ne "v$version") {
+          if ($env:AIRFRAME_TAG -ne "v$version") {
             throw "The release tag must match the Cargo workspace version."
           }
       - name: Test Airframe
         run: cargo test --workspace --locked
       - name: Build Windows installer
-        run: ./installer/build.ps1
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'nsis-3.11.zip'
+          curl.exe --fail --location --retry 3 --max-time 45 'https://downloads.sourceforge.net/project/nsis/NSIS%203/3.11/nsis-3.11.zip' -o $archive
+          if ($LASTEXITCODE -ne 0) {
+            curl.exe --fail --location --retry 3 --max-time 45 'https://distfiles.macports.org/nsis/nsis-3.11.zip' -o $archive
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash -ne 'C7D27F780DDB6CFFB4730138CD1591E841F4B7EDB155856901CDF5F214394FA1') {
+            throw 'NSIS archive checksum mismatch.'
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath $env:RUNNER_TEMP -Force
+          ./installer/build.ps1 -Makensis (Join-Path $env:RUNNER_TEMP 'nsis-3.11/makensis.exe')
       - name: Publish installer
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view $env:GITHUB_REF_NAME --repo $env:GITHUB_REPOSITORY *> $null
+          $assets = gh release view $env:AIRFRAME_TAG --repo $env:GITHUB_REPOSITORY --json assets --jq '.assets[].name' 2>$null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $env:GITHUB_REF_NAME dist/Airframe-Setup-x64.exe --repo $env:GITHUB_REPOSITORY
+            if ($assets -contains 'Airframe-Setup-x64.exe') {
+              Write-Output 'This release already has a Windows installer.'
+              exit 0
+            }
+            gh release upload $env:AIRFRAME_TAG dist/Airframe-Setup-x64.exe --repo $env:GITHUB_REPOSITORY
           } else {
-            gh release create $env:GITHUB_REF_NAME dist/Airframe-Setup-x64.exe --repo $env:GITHUB_REPOSITORY --verify-tag --generate-notes
+            gh release create $env:AIRFRAME_TAG dist/Airframe-Setup-x64.exe --repo $env:GITHUB_REPOSITORY --verify-tag --generate-notes
           }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

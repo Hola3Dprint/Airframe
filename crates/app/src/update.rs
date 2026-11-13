@@ -167,8 +167,8 @@ impl Updater {
                 }
                 Event::Failed(error) => {
                     self.receiver = None;
-                    if self.manual || self.progress.take().is_some() {
-                        self.progress = None;
+                    let downloading = self.progress.take().is_some();
+                    if self.manual || downloading {
                         return Some((format!("Update unavailable · {error}"), true));
                     }
                     break;
@@ -323,7 +323,8 @@ fn download(root: &Path, report: &impl Fn(Event)) -> Result<Option<Download>, Up
 
 fn wait_for_parent(pid: u32) -> Result<(), UpdateError> {
     // SYNCHRONIZE access is enough to wait for the old process to release its executable.
-    let handle = unsafe { OpenProcess(0x0010_0000, 0, pid) };
+    const SYNCHRONIZE: u32 = 0x0010_0000;
+    let handle = unsafe { OpenProcess(SYNCHRONIZE, 0, pid) };
     if handle.is_null() {
         let error = std::io::Error::last_os_error();
         if error.raw_os_error() == Some(ERROR_INVALID_PARAMETER as i32) {
