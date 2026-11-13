@@ -135,7 +135,13 @@ fn custom_curve(ui: &mut Ui, fan: &mut Branch, unit: &str, scale: f64) -> bool {
     changed
 }
 
-fn curve_plot(ui: &mut Ui, p: Palette, fan: &Branch, speed: f64, point: Option<(f64, f64)>) {
+pub(super) fn curve_plot(
+    ui: &mut Ui,
+    p: Palette,
+    fan: &Branch,
+    speed: f64,
+    point: Option<(f64, f64)>,
+) {
     let rated_flow = fan.fan_rated_flow().unwrap_or_default();
     let shutoff_pa = physics::pressure_fan_rise(fan, 1.0, 0.0);
     if !shutoff_pa.is_finite() || shutoff_pa <= 0.0 || !speed.is_finite() {

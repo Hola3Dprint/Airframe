@@ -204,6 +204,7 @@ pub struct Workbench {
     pub(crate) placing_preset: Option<crate::presets::NodePreset>,
     pub(crate) library_press: Option<(LibraryDrag, Pos2)>,
     pub focus_circuit: bool,
+    pub(crate) circuit_element: Option<(Uuid, airflow::circuit::Symbol)>,
     pub(crate) dragging: Option<MoveDrag>,
     pub(crate) draw_container: bool,
     pub(crate) container_start: Option<Pos2>,
@@ -295,6 +296,7 @@ impl Workbench {
             placing_preset: None,
             library_press: None,
             focus_circuit: false,
+            circuit_element: None,
             dragging: None,
             draw_container: false,
             container_start: None,
@@ -385,6 +387,7 @@ impl Workbench {
         }
     }
     fn reconcile(&mut self) {
+        self.circuit_element = None;
         if self.project.network.floor(self.active_floor).is_none() {
             self.active_floor = self.project.network.floors[0].id;
         }
@@ -1165,6 +1168,7 @@ impl Workbench {
                     ] {
                         if ui.selectable_label(self.view == view, label).clicked() {
                             self.view = view;
+                            self.circuit_element = None;
                             self.draw_container = false;
                             self.container_start = None;
                             self.tool = None;
@@ -1638,6 +1642,7 @@ impl Workbench {
             return;
         }
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
+            self.circuit_element = None;
             self.placing_preset = None;
             self.tool = None;
             self.from = None;

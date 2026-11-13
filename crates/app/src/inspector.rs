@@ -4,6 +4,7 @@ use eframe::egui::*;
 use uuid::Uuid;
 
 mod bulk;
+mod circuit;
 pub(crate) mod fan;
 
 pub fn number(ui: &mut Ui, label: &str, value: &mut f64, unit: &str, speed: f64) {
@@ -33,6 +34,17 @@ impl Workbench {
                 ScrollArea::vertical().show(ui, |ui| {
                     eyebrow(ui, "03  /  PROPERTIES", p);
                     heading(ui, "Inspector");
+                    if self.view == crate::workbench::View::Circuit
+                        && self.selection.len() == 1
+                        && let Some((id, symbol)) = self.circuit_element
+                        && self.picked() == Some(id)
+                        && self.inspect_circuit_symbol(ui, p, id, symbol)
+                    {
+                        if ui.button("Show component properties").clicked() {
+                            self.circuit_element = None;
+                        }
+                        return;
+                    }
                     let prev = self.project.clone();
                     if let Some(id) = self.picked() {
                         if self.selection.len() == 1 && let Some(container) = self.project.drawing.containers.get(&id) {

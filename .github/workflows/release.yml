@@ -44,6 +44,22 @@ jobs:
           }
           Expand-Archive -LiteralPath $archive -DestinationPath $env:RUNNER_TEMP -Force
           ./installer/build.ps1 -Makensis (Join-Path $env:RUNNER_TEMP 'nsis-3.11/makensis.exe')
+      - name: Verify fresh Windows install
+        run: |
+          $setup = (Resolve-Path -LiteralPath 'dist/Airframe-Setup-x64.exe').Path
+          $process = Start-Process -FilePath $setup -ArgumentList '/S' -WindowStyle Hidden -PassThru -Wait
+          if ($process.ExitCode -ne 0) { throw "Airframe setup exited with $($process.ExitCode)." }
+          $installed = Join-Path $env:LOCALAPPDATA 'Airframe/Airframe.exe'
+          $built = 'target/release-windows/x86_64-pc-windows-msvc/release/airframe.exe'
+          if ((Get-FileHash -LiteralPath $installed).Hash -ne (Get-FileHash -LiteralPath $built).Hash) {
+            throw 'The installed executable differs from the release build.'
+          }
+          $app = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Airframe'
+          if ("v$($app.DisplayVersion)" -ne $env:AIRFRAME_TAG) { throw 'Windows registered the wrong Airframe version.' }
+          $env:AIRFRAME_SKIP_UPDATE_CHECK = '1'
+          $running = Start-Process -FilePath $installed -WorkingDirectory (Split-Path $installed) -WindowStyle Hidden -PassThru
+          if ($running.WaitForExit(5000)) { throw "Airframe exited during startup with $($running.ExitCode)." }
+          Stop-Process -InputObject $running
       - name: Publish installer
         env:
           GH_TOKEN: ${{ github.token }}

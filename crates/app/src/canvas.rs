@@ -76,6 +76,10 @@ impl CircuitWire {
     fn symbol_center(&self, badge: Rect, index: usize, count: usize, zoom: f32) -> Pos2 {
         badge.center() + self.axis * ((index as f32 - (count - 1) as f32 * 0.5) * 44.0 * zoom)
     }
+    fn symbol_bounds(&self, center: Pos2, zoom: f32) -> Rect {
+        let size = vec2((31.0 * zoom).max(10.0), (22.0 * zoom).max(10.0));
+        Rect::from_center_size(center, if self.axis.y == 0.0 { size } else { size.yx() })
+    }
 
     fn flow_arrow(&self, badge: Rect, reversed: bool) -> Option<(Pos2, Vec2)> {
         let points = &self.points;
@@ -940,6 +944,39 @@ impl Workbench {
         let hovered = ctx
             .pointer_interact_pos()
             .filter(|q| rect.intersect(ui.clip_rect()).contains(*q));
+        let element_hit = hovered.filter(|_| circuit_mode).and_then(|at| {
+            let zoom = camera.zoom;
+            let shunts = nodes.iter().filter_map(|draw| {
+                let element = circuit::node_element(net.node(draw.id)?, net.air);
+                if element.symbol == Symbol::Junction || draw.inline {
+                    return None;
+                }
+                let center = circuit_shunt(draw.rect.center(), zoom);
+                let bounds = Rect::from_center_size(center, vec2(20.0, 23.0) * zoom.max(0.5));
+                Some((bounds, center, (element.origin, element.symbol)))
+            });
+            let series = wires
+                .iter()
+                .filter_map(|w| Some((w, w.circuit.as_ref()?, net.branch(w.id)?)))
+                .flat_map(|(w, wire, branch)| {
+                    let count = circuit::branch_elements(branch, net.air).count();
+                    circuit::branch_elements(branch, net.air).enumerate().map(
+                        move |(i, element)| {
+                            let center = wire.symbol_center(w.badge, i, count, zoom);
+                            (
+                                wire.symbol_bounds(center, zoom),
+                                center,
+                                (element.origin, element.symbol),
+                            )
+                        },
+                    )
+                });
+            shunts
+                .chain(series)
+                .filter(|(bounds, _, _)| bounds.contains(at))
+                .min_by(|a, b| a.1.distance_sq(at).total_cmp(&b.1.distance_sq(at)))
+                .map(|(_, _, key)| key)
+        });
         let mut wire_hits = Vec::new();
         if let Some(pos) = hovered {
             wire_hits.extend(
@@ -1045,7 +1082,9 @@ impl Workbench {
         {
             ctx.set_cursor_icon(CursorIcon::Grab);
         }
-        let hit = badge_hit
+        let hit = element_hit
+            .map(|(id, _)| id)
+            .or(badge_hit)
             .or(node_hit)
             .or_else(|| hovered.and_then(container_at))
             .or_else(|| wire_hits.first().copied());
@@ -1206,7 +1245,23 @@ impl Workbench {
             let selected = self.selection.contains(&w.id);
             if w.circuit.is_some() {
                 let active = selected || route.contains(&w.id) || badge_hit == Some(w.id);
-                draw_circuit_branch(&painter, w, branch, net.air, camera.zoom, p, active);
+                let symbol = self
+                    .circuit_element
+                    .filter(|(id, _)| selected && *id == w.id)
+                    .or(element_hit.filter(|(id, _)| *id == w.id))
+                    .map(|(_, symbol)| symbol);
+                draw_circuit_branch(
+                    &painter,
+                    w,
+                    branch,
+                    net.air,
+                    camera.zoom,
+                    p,
+                    CircuitHighlight {
+                        branch: active,
+                        symbol,
+                    },
+                );
                 if (active || self.overlay == Overlay::Direction)
                     && let Some(q) = self.flow(w.id).filter(|q| q.abs() > 1e-7)
                     && let Some((at, direction)) = w
@@ -1465,6 +1520,16 @@ impl Workbench {
             let r = item.rect;
             if circuit_mode {
                 draw_circuit_node(&painter, item, n, p, color, camera.zoom, selected);
+                if (selected && self.circuit_element.is_some_and(|(id, _)| id == item.id))
+                    || element_hit.is_some_and(|(id, _)| id == item.id)
+                {
+                    let shunt = circuit_shunt(r.center(), camera.zoom);
+                    highlight_symbol(
+                        &painter,
+                        Rect::from_center_size(shunt, vec2(21.0, 26.0) * camera.zoom.max(0.5)),
+                        p.accent,
+                    );
+                }
                 if let Some(pa) = pressure.filter(|_| selected) {
                     painter.text(
                         r.center() + vec2(5.0, 7.0),
@@ -2131,6 +2196,16 @@ impl Workbench {
                 );
                 let (alt, shift) =
                     ctx.input(|i| (i.modifiers.alt, i.modifiers.shift || self.multi_select));
+                if !alt {
+                    self.circuit_element = element_hit;
+                    if let Some((id, _)) = element_hit {
+                        self.selection = vec![id];
+                        ctx.request_repaint();
+                        return;
+                    }
+                } else {
+                    self.circuit_element = None;
+                }
                 let hit = if alt && !candidates.is_empty() {
                     let next = self
                         .picked()
@@ -2893,6 +2968,24 @@ fn circuit_wire(
     )
 }
 
+struct CircuitHighlight {
+    branch: bool,
+    symbol: Option<Symbol>,
+}
+
+fn highlight_symbol(p: &Painter, bounds: Rect, color: Color32) {
+    p.rect_stroke(
+        bounds.expand(2.0),
+        3,
+        Stroke::new(1.35_f32, color),
+        StrokeKind::Outside,
+    );
+}
+
+fn circuit_shunt(at: Pos2, zoom: f32) -> Pos2 {
+    at + vec2(14.0, 29.0) * zoom
+}
+
 fn draw_circuit_branch(
     p: &Painter,
     w: &Wire,
@@ -2900,9 +2993,10 @@ fn draw_circuit_branch(
     air: Air,
     zoom: f32,
     palette: Palette,
-    hot: bool,
+    highlight: CircuitHighlight,
 ) {
     let route = w.circuit.as_ref().expect("circuit wire");
+    let hot = highlight.branch;
     let stroke = Stroke::new(if hot { 2.1 } else { 1.25_f32 }, w.color);
     p.add(Shape::line(route.points.clone(), stroke));
     let elements = circuit::branch_elements(branch, air);
@@ -2915,6 +3009,9 @@ fn draw_circuit_branch(
             Stroke::new(stroke.width + 2.0, palette.canvas),
         );
         draw_symbol(p, center, el.symbol, w.color, zoom, route.axis);
+        if highlight.symbol == Some(el.symbol) {
+            highlight_symbol(p, route.symbol_bounds(center, zoom), palette.accent);
+        }
     }
     let vertical = route.axis.y != 0.0;
     let (point, anchor) = if vertical {
@@ -2959,7 +3056,7 @@ fn draw_circuit_node(
     };
     if !matches!(symbol, Symbol::Junction) {
         let terminal = at + ground * (12.0 * zoom);
-        let shunt = at + vec2(14.0, 29.0) * zoom;
+        let shunt = circuit_shunt(at, zoom);
         p.add(Shape::line(
             vec![
                 at,
