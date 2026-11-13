@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "name": "Two-floor ventilation",
-  "notes": "Synthetic example for testing stacked routes and a connected riser. Elevations describe the layout; stack pressure is not modeled.",
+  "notes": "Air passes through the door from Studio 01 to Studio 02, then rises to the second floor and exits through the exhaust fan. Adjust the door's free area or open fraction in the Inspector.",
   "network": {
     "air": {
       "absolute_pa": 101325.0,
@@ -163,36 +163,28 @@
       },
       {
         "id": "03d8f343-2f73-4aff-a7d4-9842f91200e2",
-        "name": "Door transfer",
+        "name": "Door",
         "from": "efbd2ac5-5e89-4cd6-a9aa-788c7ea5af73",
         "to": "a8cd9913-969f-4ab6-be35-425710b10ef3",
         "system": "transfer",
         "start_elevation_m": 0.0,
         "end_elevation_m": 0.0,
+        "aperture": {
+          "area_m2": 1.8,
+          "discharge": 0.65,
+          "open_fraction": 1.0
+        },
         "kind": {
           "type": "opening",
           "k": 500.0
         }
       },
       {
-        "id": "8fb7a0a5-bad4-4fe7-8bfe-8e62d18b761d",
-        "name": "Relief",
-        "from": "a8cd9913-969f-4ab6-be35-425710b10ef3",
-        "to": "9be92cb0-d8bb-428c-ad5a-185f878d45ff",
-        "system": "outdoor",
-        "start_elevation_m": 0.0,
-        "end_elevation_m": 0.0,
-        "kind": {
-          "type": "opening",
-          "k": 800.0
-        }
-      },
-      {
         "id": "60333cad-bb5e-40e7-a4c5-c975428eb00d",
         "name": "Vertical riser",
-        "from": "d956af92-bc2e-4bd1-a19d-61e33d6e475c",
+        "from": "a8cd9913-969f-4ab6-be35-425710b10ef3",
         "to": "bc9461b5-b6ed-4539-9e9d-43ca18fda0d9",
-        "system": "supply",
+        "system": "transfer",
         "start_elevation_m": 0.0,
         "end_elevation_m": 4.0,
         "kind": {
@@ -240,8 +232,9 @@
         "start_elevation_m": 4.0,
         "end_elevation_m": 4.0,
         "kind": {
-          "type": "flow_fan",
-          "design_m3_s": 0.16,
+          "type": "pressure_fan",
+          "shutoff_pa": 75.0,
+          "k": 1800.0,
           "tau_s": 5.0
         }
       }

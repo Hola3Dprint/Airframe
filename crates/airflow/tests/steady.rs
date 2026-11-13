@@ -233,6 +233,18 @@ fn two_floor_equilibrium_balances_rooms_and_junctions() {
     assert!(r.snapshot.branches.iter().enumerate().any(|(i, b)| {
         matches!(b.kind, BranchKind::Duct { riser: true, .. }) && r.flows[i].abs() > 0.01
     }));
+    let (i, door) = r
+        .snapshot
+        .branches
+        .iter()
+        .enumerate()
+        .find(|(_, b)| b.name == "Door")
+        .unwrap();
+    assert_eq!(r.snapshot.node(door.from).unwrap().name, "Studio 01");
+    assert_eq!(r.snapshot.node(door.to).unwrap().name, "Studio 02");
+    assert!(door.aperture.is_some());
+    close(r.flows[i], 0.20, 1e-9);
+    assert!(!r.snapshot.branches.iter().any(|b| b.name == "Relief"));
 }
 
 #[test]

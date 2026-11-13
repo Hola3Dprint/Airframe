@@ -53,7 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     save(Path::new("examples/single-room.airflow.json"), &single)?;
 
     let mut two = Project::new("Two-floor ventilation");
-    two.notes = "Synthetic example for testing stacked routes and a connected riser. Elevations describe the layout; stack pressure is not modeled.".into();
+    two.notes = "Air passes through the door from Studio 01 to Studio 02, then rises to the second floor and exits through the exhaust fan. Adjust the door's free area or open fraction in the Inspector.".into();
     let f0 = two.network.floors[0].id;
     two.network.floors.push(Floor::new("Level 02", 4.0));
     let f1 = two.network.floors[1].id;
@@ -73,19 +73,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     two.add_branch("Lower transfer duct", b, c, System::Transfer, duct);
     two.add_branch("Upper transfer duct", e, f, System::Transfer, duct);
     two.add_branch(
-        "Door transfer",
+        "Door",
         c,
         d,
         System::Transfer,
         BranchKind::Opening { k: 500.0 },
     );
-    two.add_branch(
-        "Relief",
-        d,
-        a,
-        System::Outdoor,
-        BranchKind::Opening { k: 800.0 },
-    );
+    two.network.branches.last_mut().unwrap().aperture = Some(Aperture {
+        area_m2: 1.8,
+        discharge: 0.65,
+        open_fraction: 1.0,
+    });
     let riser = BranchKind::Duct {
         duct: Duct {
             length_m: 4.0,
@@ -93,9 +91,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         riser: true,
     };
-    two.add_branch("Vertical riser", b, e, System::Supply, riser);
+    two.add_branch("Vertical riser", d, e, System::Transfer, riser);
     two.add_branch("Exhaust duct", f, h, System::Exhaust, duct);
-    let exhaust = two.add_branch("Exhaust fan", h, g, System::Exhaust, fan(0.16));
+    let exhaust = two.add_branch(
+        "Exhaust fan",
+        h,
+        g,
+        System::Exhaust,
+        BranchKind::PressureFan {
+            shutoff_pa: 75.0,
+            k: 1800.0,
+            tau_s: 5.0,
+        },
+    );
     events(&mut two, supply, 0.0, 75.0);
     events(&mut two, exhaust, 10.0, 60.0);
     save(Path::new("examples/two-floor.airflow.json"), &two)?;
